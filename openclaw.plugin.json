@@ -1,0 +1,27 @@
+{
+  "name": "agent-passport-system-openclaw-plugin",
+  "version": "0.1.0",
+  "description": "Agent Passport System trust verification provider for OpenClaw. Conforms to Agent Trust Verification Provider Pattern v0.1.",
+  "author": "Tymofii Pidlisnyi <signal@aeoess.com>",
+  "license": "Apache-2.0",
+  "homepage": "https://aeoess.com",
+  "entryPoint": "dist/index.js",
+  "contracts": [
+    "before_install",
+    "before_tool_call",
+    "gateway_start"
+  ],
+  "deferredContracts": [
+    "inbound_claim",
+    "before_dispatch"
+  ],
+  "gatewayMethods": [
+    "aps.checkGrade",
+    "aps.verifyDelegation",
+    "aps.signMessage"
+  ],
+  "conformance": {
+    "spec": "Agent Trust Verification Provider Pattern v0.1",
+    "specUrl": "https://github.com/aeoess/agent-trust-verification-providers"
+  }
+}

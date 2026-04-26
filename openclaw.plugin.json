@@ -1,27 +1,90 @@
 {
-  "name": "agent-passport-system-openclaw-plugin",
-  "version": "0.1.0",
-  "description": "Agent Passport System trust verification provider for OpenClaw. Conforms to Agent Trust Verification Provider Pattern v0.1.",
-  "author": "Tymofii Pidlisnyi <signal@aeoess.com>",
-  "license": "Apache-2.0",
-  "homepage": "https://aeoess.com",
-  "entryPoint": "dist/index.js",
-  "contracts": [
-    "before_install",
-    "before_tool_call",
-    "gateway_start"
-  ],
-  "deferredContracts": [
-    "inbound_claim",
-    "before_dispatch"
-  ],
-  "gatewayMethods": [
-    "aps.checkGrade",
-    "aps.verifyDelegation",
-    "aps.signMessage"
-  ],
-  "conformance": {
-    "spec": "Agent Trust Verification Provider Pattern v0.1",
-    "specUrl": "https://github.com/aeoess/agent-trust-verification-providers"
+  "id": "aps",
+  "description": "Agent Passport System trust verification provider for OpenClaw. Reference implementation of Agent Trust Verification Provider Pattern v0.1. Gates skill installs against the APS public trust registry, gates high-risk tool calls behind explicit approval, and exposes APS primitives (grade lookup, delegation verification, message signing) via OpenClaw gateway RPC.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "provider": {
+        "type": "string",
+        "description": "Provider name. Always 'aps' for this plugin.",
+        "default": "aps"
+      },
+      "endpoints": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "verifier": {
+            "type": "string",
+            "description": "Public APS trust profile API base URL.",
+            "default": "https://gateway.aeoess.com/api/v1/public/trust"
+          },
+          "jwks": {
+            "type": "string",
+            "description": "APS gateway JWKS endpoint for envelope signature verification.",
+            "default": "https://gateway.aeoess.com/.well-known/jwks.json"
+          }
+        }
+      },
+      "credentials": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "passportPath": {
+            "type": "string",
+            "description": "Local APS passport file path. Used by aps.signMessage RPC for outbound message signing. If absent, signing methods are unavailable but install/tool gates still work."
+          }
+        }
+      },
+      "policy": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "skillAuthor": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "minGrade": {"type": "number", "default": 0},
+              "warnBelow": {
+                "type": "number",
+                "description": "Surface a warning finding when author APS grade is below this value.",
+                "default": 1
+              },
+              "blockBelow": {
+                "type": ["number", "null"],
+                "description": "Block install when author APS grade is below this value. null disables blocking.",
+                "default": null
+              }
+            }
+          },
+          "toolCalls": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enforceScope": {"type": "boolean", "default": true},
+              "highRiskTools": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Tool names treated as high-risk. Default: bash, exec, fetch.",
+                "default": ["bash", "exec", "fetch"]
+              },
+              "highRiskBehavior": {
+                "type": "string",
+                "enum": ["approval", "block", "warn"],
+                "default": "approval"
+              }
+            }
+          },
+          "inboundMessages": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "requireSignature": {"type": "boolean", "default": false},
+              "warnUnsigned": {"type": "boolean", "default": true}
+            }
+          }
+        }
+      }
+    }
   }
 }

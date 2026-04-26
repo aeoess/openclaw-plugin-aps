@@ -1,4 +1,7 @@
-# Changelog
+## v0.1.1 (2026-04-26)
+
+- Fix: declare `openclaw.extensions`, `runtimeExtensions`, `compat`, `build` in package.json (required by ClawHub `package publish` for code-plugin family).
+- Fix: rewrite `openclaw.plugin.json` to match canonical schema (`id`, `description`, `configSchema`). Custom `contracts` / `deferredContracts` / `gatewayMethods` / `conformance` fields removed; that information lives in the README and the spec instead.
 
 ## v0.1.0 (2026-04-26)
 

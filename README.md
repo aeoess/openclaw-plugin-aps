@@ -1,3 +1,5 @@
+> Archived 2026-09-02. Plugin built against an earlier SDK generation; not maintained.
+
 # agent-passport-system-openclaw-plugin
 
 OpenClaw plugin: Agent Passport System trust verification provider. Reference implementation of [Agent Trust Verification Provider Pattern v0.1](https://github.com/aeoess/agent-trust-verification-providers).

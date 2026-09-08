@@ -1,15 +1,30 @@
 // Agent Passport System OpenClaw plugin — entry.
 // Conformance: Agent Trust Verification Provider Pattern v0.1.
-// Hooks: before_install, before_tool_call, gateway_start. inbound_claim and
-// before_dispatch deferred to v0.2.
+// Hooks: before_install, before_tool_call, gateway_start. All three verified
+// present in OpenClaw 2026.9.2 at src/plugins/hook-types.ts:139, :119 and :129.
+// inbound_claim and before_dispatch remain deferred.
+//
+// Verification runs in the SDK, never here. aps.verifyDelegation calls the
+// authority-aware chain verifier with trust inputs the operator supplied, so an
+// integrity-only answer can never be mistaken for an authorization decision
+// (agent-passport-system 6.0.0 advisory GHSA-r2fw-x6mg-f6h8).
 
 import { existsSync, readFileSync } from 'node:fs'
-import { sign, verifyDelegation } from 'agent-passport-system'
+import { sign, verifyAuthorityDelegationChain } from 'agent-passport-system'
+import type { AuthorityDelegationV1, RevocationResolution } from 'agent-passport-system'
 import { type APSPluginConfig, loadConfig } from './config.js'
 import { type TrustProfile, checkGrade, fetchJWKS } from './aps-client.js'
 
-// Narrow types matching OpenClaw plugin SDK hook surface (commit 45146913007d).
-// Defined locally so we don't depend on a moving SDK type export.
+// Narrow structural types matching the OpenClaw hook surface at 2026.9.2
+// (src/plugins/hook-types.ts). Defined locally so the plugin does not depend on
+// a moving SDK type export; extra host fields pass through structurally.
+//
+// The host payload carries NO author on either skill or plugin
+// (PluginHookBeforeInstallSkill is { installId, installSpec? };
+// PluginHookBeforeInstallPlugin is { pluginId, contentType, packageName?,
+// manifestId?, version?, extensions? }). The author fields below are read only
+// if a future host adds them; today the author gate resolves scoped npm package
+// names and nothing else, which the README states.
 
 interface InstallFinding { ruleId: string; severity: 'info' | 'warn' | 'critical'; file: string; line: number; message: string }
 type InstallEvent = {
@@ -21,7 +36,9 @@ interface InstallResult { findings?: InstallFinding[]; block?: boolean; blockRea
 interface ToolCallEvent { toolName: string; params: Record<string, unknown>; runId?: string; toolCallId?: string }
 interface ToolCallResult {
   block?: boolean; blockReason?: string
-  requireApproval?: { title: string; description: string; severity?: 'info' | 'warning' | 'critical'; timeoutMs?: number; timeoutBehavior?: 'allow' | 'deny' }
+  // timeoutBehavior is deprecated at 2026.9.2 (unresolved approvals always
+  // deny) and is scheduled for removal; it is not set.
+  requireApproval?: { title: string; description: string; severity?: 'info' | 'warning' | 'critical'; timeoutMs?: number }
 }
 interface GatewayStartEvent { port: number }
 
@@ -88,11 +105,45 @@ export function makeBeforeToolCall(config: APSPluginConfig) {
       requireApproval: {
         title: `Approve high-risk tool: ${event.toolName}`,
         description: `APS plugin policy requires explicit approval for ${event.toolName}.`,
-        severity: 'warning', timeoutMs: 30_000, timeoutBehavior: 'deny',
+        severity: 'warning', timeoutMs: 30_000,
       },
     }
     return undefined
   }
+}
+
+/** Authority-aware delegation verification.
+ *
+ *  Every trust input comes from the operator's config and none from the chain:
+ *  the key that checks a signature is looked up by issuer in the configured
+ *  anchor list, and a root is trusted only if the operator named its issuer.
+ *  With no anchors configured nothing verifies, which is the intended default.
+ *
+ *  Self-signed roots are refused unless the operator explicitly opts in, and
+ *  even then the root's issuer must still resolve to a configured key. That
+ *  opt-in is integrity-only and is not issuer trust, in the SDK's terms.
+ *
+ *  Revocation resolves to 'unknown' because this plugin has no revocation
+ *  feed. It is reported, never silently treated as 'active'. */
+export function verifyChain(config: APSPluginConfig, chain: readonly unknown[]) {
+  const { trustedIssuers, allowSelfSignedRoot } = config.policy.delegation
+  const anchorFor = (issuer: string, verificationMethod?: string) =>
+    trustedIssuers.find(a =>
+      a.issuer === issuer &&
+      (a.verificationMethod === undefined || a.verificationMethod === verificationMethod)) ?? null
+
+  return verifyAuthorityDelegationChain(chain, {
+    now: new Date().toISOString(),
+    resolveVerificationKey: (issuer: string, verificationMethod: string): string | null =>
+      anchorFor(issuer, verificationMethod)?.publicKey ?? null,
+    trustRoot: (root: AuthorityDelegationV1): boolean => {
+      if (anchorFor(root.issuer, root.verification_method) === null) return false
+      // A root that delegates to itself is only accepted on an explicit opt-in.
+      if (root.issuer === root.subject && !allowSelfSignedRoot) return false
+      return true
+    },
+    resolveRevocation: (_d: AuthorityDelegationV1): RevocationResolution => 'unknown',
+  })
 }
 
 export default function definePlugin(api: PluginAPI): void {
@@ -119,9 +170,11 @@ export default function definePlugin(api: PluginAPI): void {
   })
 
   api.registerGatewayMethod('aps.verifyDelegation', async (...args: unknown[]) => {
-    const token = args[0]
-    if (!token || typeof token !== 'object') throw new Error('aps.verifyDelegation: delegation token required')
-    return verifyDelegation(token as Parameters<typeof verifyDelegation>[0])
+    const chain = args[0]
+    if (!Array.isArray(chain) || chain.length === 0) {
+      throw new Error('aps.verifyDelegation: an authority delegation chain (non-empty array, root first) is required')
+    }
+    return verifyChain(config, chain)
   })
 
   api.registerGatewayMethod('aps.signMessage', async (...args: unknown[]) => {

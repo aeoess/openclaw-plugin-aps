@@ -33,7 +33,35 @@
         "properties": {
           "passportPath": {
             "type": "string",
-            "description": "Local APS passport file path. Used by aps.signMessage RPC for outbound message signing. If absent, signing methods are unavailable but install/tool gates still work."
+            "description": "Local APS passport file path. Read only when signing.enabled is true; otherwise install and tool gates work and the private key is never loaded."
+          }
+        }
+      },
+      "signing": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Controls for the aps.signMessage gateway method.",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Turn on aps.signMessage. Leaving this false is the safe default: when it is true, any plugin or gateway client allowed below can have arbitrary messages signed with the configured passport private key.",
+            "default": false
+          },
+          "allowedCallers": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Callers permitted to sign: OpenClaw plugin ids, or the literal 'gateway-client' for any authenticated gateway client the host did not name as a plugin. Empty means no caller may sign.",
+            "default": []
+          },
+          "requireApproval": {
+            "type": "boolean",
+            "description": "Require an explicit decision on every signing request. OpenClaw 2026.9.2 gives a gateway RPC handler no approval channel, so leaving this true means signing requests are refused rather than signed unattended.",
+            "default": true
+          },
+          "auditLogPath": {
+            "type": "string",
+            "description": "Local JSON Lines log of every signing request and refusal, recording caller, domain prefix and message digest, never the message body.",
+            "default": "~/.openclaw/aps-signing-audit.log"
           }
         }
       },

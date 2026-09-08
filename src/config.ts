@@ -18,10 +18,25 @@ export interface TrustedIssuer {
   verificationMethod?: string
 }
 
+/** Controls for aps.signMessage, which signs with the configured local
+ *  passport private key. Off by default: a registered gateway method is
+ *  reachable by other plugins and by authenticated gateway clients, so an
+ *  operator opts in per host rather than inheriting signing from a passport
+ *  path that was configured for something else. */
+export interface SigningConfig {
+  enabled: boolean
+  /** Plugin ids, or the literal 'gateway-client' for any authenticated client
+   *  the host did not name as a plugin. Empty means no caller may sign. */
+  allowedCallers: string[]
+  requireApproval: boolean
+  auditLogPath: string
+}
+
 export interface APSPluginConfig {
   provider: 'aps'
   endpoints: { verifier: string; jwks: string }
   credentials: { passportPath: string }
+  signing: SigningConfig
   policy: {
     skillAuthor: { minGrade: number; warnBelow: number; blockBelow: number | null }
     toolCalls: { enforceScope: boolean; highRiskTools: string[]; highRiskBehavior: HighRiskBehavior }
@@ -41,6 +56,14 @@ export const DEFAULT_CONFIG: APSPluginConfig = {
     jwks: 'https://gateway.aeoess.com/.well-known/jwks.json',
   },
   credentials: { passportPath: join(homedir(), '.openclaw', 'aps-credentials.json') },
+  // Signing off, no caller allowed, approval required. All three have to be
+  // changed deliberately before the passport key is ever loaded.
+  signing: {
+    enabled: false,
+    allowedCallers: [],
+    requireApproval: true,
+    auditLogPath: join(homedir(), '.openclaw', 'aps-signing-audit.log'),
+  },
   policy: {
     skillAuthor: { minGrade: 0, warnBelow: 1, blockBelow: null },
     toolCalls: { enforceScope: true, highRiskTools: ['bash', 'exec', 'fetch'], highRiskBehavior: 'approval' },
@@ -51,7 +74,7 @@ export const DEFAULT_CONFIG: APSPluginConfig = {
   },
 }
 
-const KNOWN_TOP_LEVEL = new Set(['provider', 'endpoints', 'credentials', 'policy'])
+const KNOWN_TOP_LEVEL = new Set(['provider', 'endpoints', 'credentials', 'signing', 'policy'])
 const KNOWN_POLICY = new Set(['skillAuthor', 'toolCalls', 'inboundMessages', 'delegation'])
 
 export function loadConfig(): APSPluginConfig {
@@ -88,12 +111,49 @@ function mergeWithDefaults(obj: Record<string, unknown>): APSPluginConfig {
     provider: 'aps',
     endpoints: { ...DEFAULT_CONFIG.endpoints, ...endpoints },
     credentials: { ...DEFAULT_CONFIG.credentials, ...credentials },
+    signing: normalizeSigningConfig(obj.signing),
     policy: {
       skillAuthor: { ...DEFAULT_CONFIG.policy.skillAuthor, ...(policy.skillAuthor ?? {}) },
       toolCalls: { ...DEFAULT_CONFIG.policy.toolCalls, ...(policy.toolCalls ?? {}) },
       inboundMessages: { ...DEFAULT_CONFIG.policy.inboundMessages, ...(policy.inboundMessages ?? {}) },
       delegation: normalizeDelegationPolicy(policy.delegation),
     },
+  }
+}
+
+const KNOWN_SIGNING = new Set(['enabled', 'allowedCallers', 'requireApproval', 'auditLogPath'])
+
+/** Same fail-closed rule as the delegation trust inputs: a malformed signing
+ *  block is a configuration error, not an implied default. Only an explicit
+ *  `true` turns signing on, and only an explicit `false` turns approval off. */
+function normalizeSigningConfig(raw: unknown): SigningConfig {
+  if (raw === undefined || raw === null) return { ...DEFAULT_CONFIG.signing, allowedCallers: [] }
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('aps config: signing must be an object')
+  }
+  const obj = raw as Record<string, unknown>
+  for (const k of Object.keys(obj)) {
+    if (!KNOWN_SIGNING.has(k)) throw new Error(`aps config: unrecognized signing field: ${k}`)
+  }
+  const rawCallers = obj.allowedCallers
+  if (rawCallers !== undefined && !Array.isArray(rawCallers)) {
+    throw new Error('aps config: signing.allowedCallers must be an array of strings')
+  }
+  const allowedCallers = (rawCallers ?? []).map((item, i) => {
+    if (typeof item !== 'string' || item.trim().length === 0) {
+      throw new Error(`aps config: signing.allowedCallers[${i}] must be a non-empty string`)
+    }
+    return item.trim()
+  })
+  const auditLogPath = obj.auditLogPath
+  if (auditLogPath !== undefined && (typeof auditLogPath !== 'string' || auditLogPath.length === 0)) {
+    throw new Error('aps config: signing.auditLogPath must be a non-empty string')
+  }
+  return {
+    enabled: obj.enabled === true,
+    allowedCallers,
+    requireApproval: obj.requireApproval !== false,
+    auditLogPath: auditLogPath ?? DEFAULT_CONFIG.signing.auditLogPath,
   }
 }
 

@@ -93,7 +93,7 @@ Once registration succeeds, other plugins can call these by their namespaced nam
 
 The `aps.signMessage` handler is designed to sign with the private key in the passport file at `credentials.passportPath`. A gateway method registered by a plugin is not private to that plugin: OpenClaw dispatches it for authenticated gateway clients, and other plugins can reach it through the in-process runtime. The ClawHub review of 0.2.0 identified that, if registered, the original handler would have made that signing capability reachable too broadly. 0.2.1 adds caller allowlisting inside the handler, but with current OpenClaw registration fails before the handler is installed.
 
-What the reviewers told installers still holds. 0.2.1 adds allowlist enforcement inside the signing handler, but with current OpenClaw that handler is not registered, so the points below describe intended behaviour:
+What the reviewers told installers still holds. The points below describe intended behaviour:
 
 - Signing is **off by default**. With `signing.enabled` false, `aps.signMessage` refuses every request and the passport file is never opened.
 - Turning it on is a decision about every plugin on the host, not just this one. Turn it on only if you trust each installed plugin that could call `aps.signMessage`, and prefer a limited-purpose passport identity over your main one.

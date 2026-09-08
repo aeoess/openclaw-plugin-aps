@@ -61,7 +61,7 @@ export const DEFAULT_CONFIG: APSPluginConfig = {
   signing: {
     enabled: false,
     allowedCallers: [],
-    requireApproval: true,
+    requireApproval: false,
     auditLogPath: join(homedir(), '.openclaw', 'aps-signing-audit.log'),
   },
   policy: {
@@ -152,7 +152,7 @@ function normalizeSigningConfig(raw: unknown): SigningConfig {
   return {
     enabled: obj.enabled === true,
     allowedCallers,
-    requireApproval: obj.requireApproval !== false,
+    requireApproval: obj.requireApproval === true,
     auditLogPath: auditLogPath ?? DEFAULT_CONFIG.signing.auditLogPath,
   }
 }

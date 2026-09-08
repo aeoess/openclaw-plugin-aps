@@ -35,7 +35,7 @@ Schema (matches spec section 8):
   "signing": {
     "enabled": false,
     "allowedCallers": [],
-    "requireApproval": true,
+    "requireApproval": false,
     "auditLogPath": "~/.openclaw/aps-signing-audit.log"
   },
   "policy": {
@@ -53,7 +53,7 @@ Schema (matches spec section 8):
 | `credentials.passportPath` | Local APS passport file. Read only when `signing.enabled` is true |
 | `signing.enabled` | Turn on `aps.signMessage`. Default `false`. See [Signing](#signing) |
 | `signing.allowedCallers` | Plugin ids, or the literal `gateway-client`, permitted to sign. Empty means nobody |
-| `signing.requireApproval` | Require a decision on every signing request. Default `true` |
+| `signing.requireApproval` | Refuse every signing request until the host can ask a person. Default `false`; the allowlist is the gate |
 | `signing.auditLogPath` | Local log of every signing request and refusal |
 | `policy.skillAuthor.warnBelow` | Surface install-time warning when author grade < this |
 | `policy.skillAuthor.blockBelow` | Block install when author grade < this; `null` = never block |
@@ -75,8 +75,8 @@ Schema (matches spec section 8):
 
 Exposed via `api.registerGatewayMethod()`, namespaced `aps.`:
 
-- `aps.checkGrade(agentId)` → `TrustProfile | null` from the public APS gateway
-- `aps.verifyDelegation(chain)` → result of APS SDK `verifyAuthorityDelegationChain()`. Takes the delegation **chain** as an array, root first, not a single token. Trust anchors come from `policy.delegation.trustedIssuers`; with none configured nothing verifies, which is the default. Revocation resolves to `unknown` because this plugin carries no revocation feed, so a cryptographically sound chain returns `state: "indeterminate"` rather than a `valid: true` it cannot establish.
+- `aps.checkGrade` with `params: { agentId }` → `TrustProfile | null` from the public APS gateway
+- `aps.verifyDelegation` with `params: { chain }` → result of APS SDK `verifyAuthorityDelegationChain()`. `chain` is the delegation chain as an array, root first, not a single token. Gateway methods take one options object from the host; 0.2.0 read positional arguments and both RPCs were unusable. Trust anchors come from `policy.delegation.trustedIssuers`; with none configured nothing verifies, which is the default. Revocation resolves to `unknown` because this plugin carries no revocation feed, so a cryptographically sound chain returns `state: "indeterminate"` rather than a `valid: true` it cannot establish.
 - `aps.signMessage({ message })` → `{ signature, domain, digest }`. Ed25519 signature over a domain-separated input, using the local passport's private key. Off unless the operator turns it on. See [Signing](#signing).
 
 Other plugins can call these by their namespaced names.
@@ -90,7 +90,7 @@ What the reviewers told installers still holds, and the plugin now enforces it r
 - Signing is **off by default**. With `signing.enabled` false, `aps.signMessage` refuses every request and the passport file is never opened. Install and tool gates keep working.
 - Turning it on is a decision about every plugin on the host, not just this one. Turn it on only if you trust each installed plugin that could call `aps.signMessage`, and prefer a limited-purpose passport identity over your main one.
 - `signing.allowedCallers` names who may sign. Entries are OpenClaw plugin ids, or the literal `gateway-client` for an authenticated gateway client that the host did not identify as a plugin. An empty list, the default, allows nobody.
-- `signing.requireApproval` defaults to true and fails closed. OpenClaw 2026.9.2 gives a gateway RPC handler no channel to ask a person for a decision. The `requireApproval` mechanism the tool-call gate uses is a return value of the `before_tool_call` hook and is not reachable from an RPC handler, and the SDK helper that could reach the host's `plugin.approval.request` method is limited to plugin HTTP routes. So while `requireApproval` is true, signing requests are refused rather than signed unattended. To sign, an operator must set it to false and accept that the allowlist is the only gate. This is a gap in the host surface, not something the plugin can fill; the citations are in the header of `src/signing.ts`.
+- `signing.requireApproval` defaults to false, and the allowlist is the gate: signing is off unless `signing.enabled` is true, and an empty `allowedCallers` refuses everything. Setting `requireApproval` to true refuses every request, because OpenClaw 2026.9.2 gives a gateway RPC handler no channel to ask a person for a decision: the mechanism the tool-call gate uses is a return value of the `before_tool_call` hook, and the SDK helper that reaches the host approval method is limited to plugin HTTP routes. It exists so an operator can hard-stop signing without editing the allowlist, and it will become a real approval once the host offers one. Citations are in the header of `src/signing.ts`.
 
 Every signature is minted over `APS-OPENCLAW-PLUGIN-SIGN-MESSAGE-V1\0` plus the message, following the domain-separation convention the SDK uses for authority delegations. A signature produced here therefore does not verify as a passport, attestation or delegation signature over the same bytes, and cannot be replayed into one of those contexts.
 

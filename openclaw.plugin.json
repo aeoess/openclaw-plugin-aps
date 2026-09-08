@@ -56,7 +56,7 @@
           "requireApproval": {
             "type": "boolean",
             "description": "Require an explicit decision on every signing request. OpenClaw 2026.9.2 gives a gateway RPC handler no approval channel, so leaving this true means signing requests are refused rather than signed unattended.",
-            "default": true
+            "default": false
           },
           "auditLogPath": {
             "type": "string",

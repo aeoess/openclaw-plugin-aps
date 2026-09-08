@@ -180,16 +180,20 @@ export default function definePlugin(api: PluginAPI): void {
     log(api, 'info', `aps plugin ready (provider=${config.provider}, verifier=${config.endpoints.verifier})`)
   })
 
-  api.registerGatewayMethod('aps.checkGrade', async (...args: unknown[]) => {
-    const agentId = String(args[0] ?? '')
-    if (!agentId) throw new Error('aps.checkGrade: agentId required')
+  // Gateway method handlers receive ONE options object from the host
+  // ({ params, respond, client, ... }); a returned value is delivered by the
+  // host as respond(true, value). Reading positional args here was the 0.2.0
+  // defect that made both RPCs unusable.
+  api.registerGatewayMethod('aps.checkGrade', async (request: { params?: Record<string, unknown> } = {}) => {
+    const agentId = typeof request.params?.agentId === 'string' ? request.params.agentId.trim() : ''
+    if (!agentId) throw new Error('aps.checkGrade: params.agentId (string) required')
     return await checkGrade(config.endpoints.verifier, agentId)
   })
 
-  api.registerGatewayMethod('aps.verifyDelegation', async (...args: unknown[]) => {
-    const chain = args[0]
+  api.registerGatewayMethod('aps.verifyDelegation', async (request: { params?: Record<string, unknown> } = {}) => {
+    const chain = request.params?.chain
     if (!Array.isArray(chain) || chain.length === 0) {
-      throw new Error('aps.verifyDelegation: an authority delegation chain (non-empty array, root first) is required')
+      throw new Error('aps.verifyDelegation: params.chain (non-empty array, root first) is required')
     }
     return verifyChain(config, chain)
   })

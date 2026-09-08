@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DEFAULT_CONFIG, loadConfig } from '../src/config.js'
-import { makeBeforeInstall, makeBeforeToolCall, type PluginAPI } from '../src/index.js'
+import definePlugin, { makeBeforeInstall, makeBeforeToolCall, type PluginAPI } from '../src/index.js'
 
 vi.mock('../src/aps-client.js', async () => {
   const actual = await vi.importActual<typeof import('../src/aps-client.js')>('../src/aps-client.js')
@@ -54,8 +54,8 @@ describe('config', () => {
     const cfg = loadConfig()
     expect(cfg.signing.enabled).toBe(true)
     expect(cfg.signing.allowedCallers).toEqual(['peer'])
-    // Not stated in the file, so approval stays on.
-    expect(cfg.signing.requireApproval).toBe(true)
+    // Not stated in the file: the allowlist is the gate; the hard-stop is opt-in.
+    expect(cfg.signing.requireApproval).toBe(false)
   })
 
   it('rejects malformed config (unrecognized signing field)', () => {
@@ -132,5 +132,40 @@ describe('before_tool_call handler', () => {
   it('passes through (returns undefined) for non-high-risk tools', () => {
     const handler = makeBeforeToolCall(DEFAULT_CONFIG)
     expect(handler({ toolName: 'read_file', params: {} })).toBeUndefined()
+  })
+})
+
+describe('gateway methods receive the host options object', () => {
+  // The host calls a registered method with ONE object ({ params, respond, client, ... })
+  // and delivers a returned value as respond(true, value). 0.2.0 read positional args
+  // and so answered every call with "[object Object]" or a thrown error.
+  function capture() {
+    const methods = new Map<string, (request: Record<string, unknown>) => Promise<unknown>>()
+    const api: PluginAPI = {
+      registerHook: () => {},
+      registerGatewayMethod: (name: string, handler: unknown) => { methods.set(name, handler as (request: Record<string, unknown>) => Promise<unknown>) },
+      log: () => {},
+    }
+    definePlugin(api)
+    return methods
+  }
+
+  it('aps.checkGrade reads params.agentId and forwards it', async () => {
+    mockedCheckGrade.mockResolvedValueOnce({ found: true, grade: 2 } as unknown as never)
+    const methods = capture()
+    const result = await methods.get('aps.checkGrade')!({ params: { agentId: 'agent-x' } })
+    expect(mockedCheckGrade).toHaveBeenCalledWith(expect.any(String), 'agent-x')
+    expect(result).toMatchObject({ grade: 2 })
+  })
+
+  it('aps.checkGrade refuses when params.agentId is missing', async () => {
+    const methods = capture()
+    await expect(methods.get('aps.checkGrade')!({ params: {} })).rejects.toThrow(/params\.agentId/)
+  })
+
+  it('aps.verifyDelegation reads params.chain and refuses an empty one', async () => {
+    const methods = capture()
+    await expect(methods.get('aps.verifyDelegation')!({ params: { chain: [] } })).rejects.toThrow(/params\.chain/)
+    await expect(methods.get('aps.verifyDelegation')!({})).rejects.toThrow(/params\.chain/)
   })
 })

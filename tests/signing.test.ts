@@ -161,10 +161,10 @@ describe('aps.signMessage gate', () => {
 })
 
 describe('signing config', () => {
-  it('defaults to off, no allowed callers, approval required', () => {
+  it('defaults to off, no allowed callers, allowlist as the gate', () => {
     expect(DEFAULT_CONFIG.signing.enabled).toBe(false)
     expect(DEFAULT_CONFIG.signing.allowedCallers).toEqual([])
-    expect(DEFAULT_CONFIG.signing.requireApproval).toBe(true)
+    expect(DEFAULT_CONFIG.signing.requireApproval).toBe(false)
     expect(DEFAULT_CONFIG.signing.auditLogPath).toMatch(/aps-signing-audit\.log$/)
   })
 })

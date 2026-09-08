@@ -1,6 +1,6 @@
 {
   "name": "agent-passport-system-openclaw-plugin",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "OpenClaw plugin: Agent Passport System trust verification provider. Conforms to Agent Trust Verification Provider Pattern v0.1.",
   "license": "Apache-2.0",
   "author": "Tymofii Pidlisnyi <signal@aeoess.com>",
@@ -30,7 +30,7 @@
   },
   "dependencies": {
     "@noble/ed25519": "^2.1.0",
-    "agent-passport-system": "^2.2.0"
+    "agent-passport-system": "^6.0.1"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
@@ -60,11 +60,11 @@
       "./dist/index.js"
     ],
     "compat": {
-      "pluginApi": ">=2026.3.24-beta.2",
-      "minGatewayVersion": "2026.3.24-beta.2"
+      "pluginApi": ">=2026.4.11",
+      "minGatewayVersion": "2026.4.11"
     },
     "build": {
-      "openclawVersion": "2026.3.24-beta.2"
+      "openclawVersion": "2026.9.2"
     }
   }
 }

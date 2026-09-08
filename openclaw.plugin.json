@@ -83,6 +83,33 @@
               "requireSignature": {"type": "boolean", "default": false},
               "warnUnsigned": {"type": "boolean", "default": true}
             }
+          },
+          "delegation": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Trust inputs for authority-aware delegation verification. Supplied by the operator and never read from the record being verified.",
+            "properties": {
+              "trustedIssuers": {
+                "type": "array",
+                "description": "Issuers this operator trusts, each with the Ed25519 public key it signs with. Empty means nothing verifies.",
+                "default": [],
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["issuer", "publicKey"],
+                  "properties": {
+                    "issuer": {"type": "string"},
+                    "publicKey": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "verificationMethod": {"type": "string"}
+                  }
+                }
+              },
+              "allowSelfSignedRoot": {
+                "type": "boolean",
+                "description": "Accept a root whose issuer and subject are the same identity. Integrity-only; not a substitute for issuer trust, and the issuer must still resolve to a configured key.",
+                "default": false
+              }
+            }
           }
         }
       }

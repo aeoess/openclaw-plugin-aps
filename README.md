@@ -1,10 +1,10 @@
-> Not current. This plugin still depends on agent-passport-system ^2.2.0, an SDK generation covered by the September 2026 advisories; do not rely on its verification until it is reworked on SDK 6.x. The 0.1.2 manifest fix is on this branch; no new version is published until then.
-
 # agent-passport-system-openclaw-plugin
 
 OpenClaw plugin: Agent Passport System trust verification provider. Reference implementation of [Agent Trust Verification Provider Pattern v0.1](https://github.com/aeoess/agent-trust-verification-providers).
 
 The plugin gates skill installs against the APS public trust registry, gates high-risk tool calls behind explicit approval, and exposes APS primitives (grade lookup, delegation verification, message signing) via OpenClaw gateway RPC. It runs entirely in the OpenClaw plugin lifecycle and adds no requirement on OpenClaw core.
+
+Verification runs in `agent-passport-system` 6.0.1. The plugin calls the SDK and implements no verification of its own. Delegation verification uses the authority-aware chain verifier with trust anchors the operator configures, so an integrity result is never returned as an authorization decision (SDK 6.0.0, advisory GHSA-r2fw-x6mg-f6h8).
 
 ## Install
 
@@ -66,7 +66,7 @@ Schema (matches spec section 8):
 Exposed via `api.registerGatewayMethod()`, namespaced `aps.`:
 
 - `aps.checkGrade(agentId)` → `TrustProfile | null` from the public APS gateway
-- `aps.verifyDelegation(token)` → result of APS SDK `verifyDelegation()`
+- `aps.verifyDelegation(chain)` → result of APS SDK `verifyAuthorityDelegationChain()`. Takes the delegation **chain** as an array, root first, not a single token. Trust anchors come from `policy.delegation.trustedIssuers`; with none configured nothing verifies, which is the default. Revocation resolves to `unknown` because this plugin carries no revocation feed, so a cryptographically sound chain returns `state: "indeterminate"` rather than a `valid: true` it cannot establish.
 - `aps.signMessage(payload)` → Ed25519 signature using local passport's private key
 
 Other plugins can call these by their namespaced names.
@@ -78,10 +78,10 @@ This plugin claims conformance to **Agent Trust Verification Provider Pattern v0
 - ✅ Registers `before_install`, `before_tool_call`, `gateway_start` (criterion 1)
 - ✅ Accepts the section-8 configuration schema (criterion 2)
 - ✅ Defaults to permissive-with-warnings (criterion 3)
-- ✅ Handles missing-author and missing-credential without crash (criterion 4)
-- ✅ Cold-case `before_tool_call` is in-process — no gateway call in v0.1 (criterion 5)
+- ✅ Handles missing-author and missing-credential without crash (criterion 4). Note: the OpenClaw `before_install` payload carries no author field at 2026.9.2, so the author gate resolves the npm scope of a scoped package name and otherwise reports the author as unknown.
+- ✅ Cold-case `before_tool_call` is in-process, no gateway call in v0.1 (criterion 5)
 - ✅ All gateway RPC methods namespaced `aps.` (criterion 6)
-- ⏸ `before_dispatch` headers — deferred to v0.2 (criterion 7 N/A in v0.1)
+- ⏸ `before_dispatch` headers, deferred to v0.2 (criterion 7 N/A in v0.1)
 - ✅ No state mutation outside plugin directory (criterion 8)
 - ✅ Verifier endpoint published at `gateway.aeoess.com/api/v1/public/trust/{agentId}` (criterion 9)
 - ✅ Trust signal semantics documented in [The Agent Social Contract](https://doi.org/10.5281/zenodo.18749779) (criterion 10)

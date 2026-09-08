@@ -1,3 +1,38 @@
+## Erratum (2026-09-08)
+
+Corrections to entries below, scoped to current OpenClaw. Historical entries are left as
+written; this section states what turned out to be wrong.
+
+- **v0.2.1, "the passport file is never opened":** the claim was false as shipped. While
+  signing was disabled, `gateway_start` still stat-ed, read and parsed the passport file
+  before it consulted `signing.enabled`. It was unreachable only because plugin
+  registration never completed, so no released version actually opened the file, but the
+  code did not implement the promise. The passport path is now untouched while signing is
+  off, and a test observes the filesystem boundary to confirm neither call happens.
+- **v0.2.1, "Install and tool gates are unaffected":** true only in the sense that nothing
+  ran. Versions through 0.2.1 do not register their hooks with current OpenClaw, so the
+  install and tool gates did not operate at all.
+- **v0.1.0, "Conformance against Agent Trust Verification Provider Pattern v0.1":**
+  withdrawn. The plugin targets the pattern; runtime conformance is withheld pending
+  integration proof against a real Gateway.
+- **v0.1.0, "Implements before_install, before_tool_call, gateway_start hooks":** the
+  handlers were written but registered through `api.registerHook`, which does not reach
+  typed lifecycle dispatch. With current OpenClaw the first such call also aborts
+  registration, so none of the three hooks, and none of the three RPC methods, were ever
+  installed.
+- **Breaking configuration change.** Config keys that named controls nothing read
+  have been removed: `policy.skillAuthor.minGrade`, `policy.toolCalls.enforceScope`,
+  the whole `policy.inboundMessages` block, the `"warn"` value of
+  `policy.toolCalls.highRiskBehavior`, and `endpoints.jwks`. A config carrying
+  `endpoints.jwks` still loads and warns, because that key named a service the
+  plugin no longer contacts. A config carrying any of the removed security
+  controls now fails to load: an operator set them believing they did something,
+  and accepting them silently would repeat the defect this release fixes. Any
+  other unrecognized key is also a hard error rather than a warning.
+- **v0.2.0, "The JWKS kid is binding":** the envelope verification it describes was never
+  reachable, because nothing called it. That machinery has since been deleted rather than
+  wired up, together with the `endpoints.jwks` setting.
+
 ## v0.2.1 (2026-09-08)
 
 Answers the ClawHub 0.2.0 review, which put the plugin in Review because a configured passport private key was reachable for arbitrary signing by any other installed plugin through the `aps.signMessage` RPC.

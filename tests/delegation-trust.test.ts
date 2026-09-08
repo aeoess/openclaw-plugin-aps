@@ -166,9 +166,52 @@ describe('gateway trust lookup', () => {
       { status: 200, headers: { 'content-type': 'application/json' } },
     )) as typeof fetch
     try {
-      expect(await checkGrade('https://gateway.example/api/v1/public/trust', 'nobody')).toBeNull()
+      expect(await checkGrade('https://gateway.example/api/v1/public/trust', 'nobody')).toEqual({ state: 'unknown' })
     } finally {
       globalThis.fetch = original
     }
+  })
+})
+
+// Item 4. Unknown author, unavailable verifier and malformed response are three
+// distinct states; none may be reported as another.
+describe('trust lookup distinguishes its three failure states', () => {
+  const url = 'https://gateway.example/api/v1/public/trust'
+
+  it('reports a transport failure as unavailable, never as not-found', async () => {
+    const { checkGrade } = await vi.importActual<typeof import('../src/aps-client.js')>('../src/aps-client.js')
+    const fetchMock = vi.fn(async () => { throw new Error('ECONNREFUSED') })
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      const result = await checkGrade(url, 'acme')
+      expect(result.state).toBe('unavailable')
+      expect(result).not.toEqual({ state: 'unknown' })
+    } finally { vi.unstubAllGlobals() }
+  })
+
+  it('reports a non-2xx status as unavailable', async () => {
+    const { checkGrade } = await vi.importActual<typeof import('../src/aps-client.js')>('../src/aps-client.js')
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 503 })))
+    try {
+      const result = await checkGrade(url, 'acme')
+      expect(result.state).toBe('unavailable')
+    } finally { vi.unstubAllGlobals() }
+  })
+
+  it('reports {found:true} with no grade as malformed rather than passing the gate', async () => {
+    const { checkGrade } = await vi.importActual<typeof import('../src/aps-client.js')>('../src/aps-client.js')
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ found: true }), { status: 200 })))
+    try {
+      const result = await checkGrade(url, 'acme')
+      expect(result.state).toBe('malformed')
+    } finally { vi.unstubAllGlobals() }
+  })
+
+  it('rejects an out-of-range grade as malformed', async () => {
+    const { checkGrade } = await vi.importActual<typeof import('../src/aps-client.js')>('../src/aps-client.js')
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ found: true, grade: 9 }), { status: 200 })))
+    try {
+      expect((await checkGrade(url, 'acme')).state).toBe('malformed')
+    } finally { vi.unstubAllGlobals() }
   })
 })

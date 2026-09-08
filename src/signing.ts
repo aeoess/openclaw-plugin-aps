@@ -33,6 +33,7 @@ import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { sign } from 'agent-passport-system'
 import type { APSPluginConfig } from './config.js'
+import type { OpenClawPluginApi } from 'openclaw/plugin-sdk/plugin-entry'
 
 /** Domain separation for every signature this plugin produces.
  *
@@ -54,14 +55,14 @@ export function signMessageSignatureInput(message: string): string {
  *  stable per-client name; see resolveCaller. */
 export const GATEWAY_CLIENT_CALLER = 'gateway-client'
 
-/** Structural mirror of the fields OpenClaw 2026.9.2 actually sets on
- *  GatewayRequestHandlerOptions.client. Declared locally so the plugin does not
- *  depend on a moving host type export; the host passes more fields through. */
-export interface GatewayCallerClient {
-  connect?: { role?: string; scopes?: readonly string[] }
-  connId?: string
-  internal?: { pluginRuntimeOwnerId?: string; syntheticClient?: true }
-}
+/** The caller identity the host supplies, derived from the host's own gateway
+ *  handler options rather than restated here. This one is security-bearing:
+ *  resolveCaller reads internal.pluginRuntimeOwnerId out of it to decide who
+ *  may sign, so a local mirror that drifted from the host shape would be a
+ *  silent authorization change. */
+export type GatewayCallerClient = NonNullable<
+  Parameters<Parameters<OpenClawPluginApi['registerGatewayMethod']>[1]>[0]['client']
+>
 
 export type SigningCaller = { kind: 'plugin' | 'gateway-client' | 'unknown'; id: string }
 

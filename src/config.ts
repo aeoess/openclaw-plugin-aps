@@ -1,11 +1,19 @@
 // Agent Passport System OpenClaw plugin — config schema + loader.
-// Schema mirrors section 8 of Agent Trust Verification Provider Pattern v0.1.
+// Targets section 8 of Agent Trust Verification Provider Pattern v0.1.
+//
+// Config is read ONLY from OPENCLAW_APS_CONFIG_PATH or ~/.openclaw/aps.config.json.
+// It is not read from OpenClaw's plugin config, so the host's manifest schema
+// never validates these values: this module is the only validation they get,
+// and a malformed security policy must fail rather than become the permissive
+// branch.
 
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 
-export type HighRiskBehavior = 'approval' | 'block' | 'warn'
+/** 'warn' was accepted and then fell through to no finding at all, so it was a
+ *  silently inert third option. Removed rather than implemented. */
+export type HighRiskBehavior = 'approval' | 'block'
 
 /** A trust anchor the operator has decided to accept: the issuer identifier
  *  and the Ed25519 public key that issuer signs with. Both are supplied by the
@@ -34,13 +42,12 @@ export interface SigningConfig {
 
 export interface APSPluginConfig {
   provider: 'aps'
-  endpoints: { verifier: string; jwks: string }
+  endpoints: { verifier: string }
   credentials: { passportPath: string }
   signing: SigningConfig
   policy: {
-    skillAuthor: { minGrade: number; warnBelow: number; blockBelow: number | null }
-    toolCalls: { enforceScope: boolean; highRiskTools: string[]; highRiskBehavior: HighRiskBehavior }
-    inboundMessages: { requireSignature: boolean; warnUnsigned: boolean }
+    skillAuthor: { warnBelow: number; blockBelow: number | null }
+    toolCalls: { highRiskTools: string[]; highRiskBehavior: HighRiskBehavior }
     /** Trust inputs for authority-aware delegation verification. The SDK's
      *  chain verifier takes these from the caller and never from the chain, so
      *  an empty trustedIssuers list means nothing verifies: the plugin fails
@@ -53,7 +60,6 @@ export const DEFAULT_CONFIG: APSPluginConfig = {
   provider: 'aps',
   endpoints: {
     verifier: 'https://gateway.aeoess.com/api/v1/public/trust',
-    jwks: 'https://gateway.aeoess.com/.well-known/jwks.json',
   },
   credentials: { passportPath: join(homedir(), '.openclaw', 'aps-credentials.json') },
   // Signing off, no caller allowed, approval required. All three have to be
@@ -65,9 +71,8 @@ export const DEFAULT_CONFIG: APSPluginConfig = {
     auditLogPath: join(homedir(), '.openclaw', 'aps-signing-audit.log'),
   },
   policy: {
-    skillAuthor: { minGrade: 0, warnBelow: 1, blockBelow: null },
-    toolCalls: { enforceScope: true, highRiskTools: ['bash', 'exec', 'fetch'], highRiskBehavior: 'approval' },
-    inboundMessages: { requireSignature: false, warnUnsigned: true },
+    skillAuthor: { warnBelow: 1, blockBelow: null },
+    toolCalls: { highRiskTools: ['bash', 'exec', 'fetch'], highRiskBehavior: 'approval' },
     // No anchors and no self-signed roots by default. An operator who wants
     // delegation verification configures the issuers they actually trust.
     delegation: { trustedIssuers: [], allowSelfSignedRoot: false },
@@ -75,29 +80,94 @@ export const DEFAULT_CONFIG: APSPluginConfig = {
 }
 
 const KNOWN_TOP_LEVEL = new Set(['provider', 'endpoints', 'credentials', 'signing', 'policy'])
-const KNOWN_POLICY = new Set(['skillAuthor', 'toolCalls', 'inboundMessages', 'delegation'])
+const KNOWN_POLICY = new Set(['skillAuthor', 'toolCalls', 'delegation'])
+const KNOWN_ENDPOINTS = new Set(['verifier'])
+
+/** Removing documented config keys is a breaking change, and the two kinds of
+ *  removal deserve opposite treatment.
+ *
+ *  A removed ENDPOINT is benign: it named a service the plugin no longer talks
+ *  to, so ignoring it changes nothing an operator was relying on. Warn and
+ *  continue.
+ *
+ *  A removed SECURITY CONTROL is not benign. An operator who set it believed it
+ *  did something, and it never did. Accepting the key and quietly ignoring it
+ *  would repeat the exact defect this release exists to fix: a control that
+ *  looks configured and enforces nothing. So it fails loudly and makes them
+ *  look at what their policy actually is now.
+ *
+ *  Anything else unrecognized also fails, because a key we cannot explain may
+ *  be a typo silently disabling a gate. */
+const REMOVED_ENDPOINTS = new Map<string, string>([
+  ['jwks', 'the JWKS endpoint was removed with the unused envelope-verification code; nothing fetches it'],
+])
+
+const REMOVED_SECURITY_CONTROLS = new Map<string, string>([
+  ['policy.skillAuthor.minGrade', 'minGrade was never read by any handler; use warnBelow and blockBelow'],
+  ['policy.toolCalls.enforceScope', 'enforceScope was never read by any handler; scope enforcement is not implemented'],
+  ['policy.inboundMessages', 'the inbound_claim hook is not implemented, so nothing under inboundMessages was ever read'],
+  ['policy.inboundMessages.requireSignature', 'the inbound_claim hook is not implemented'],
+  ['policy.inboundMessages.warnUnsigned', 'the inbound_claim hook is not implemented'],
+])
+
+/** Throws with the removal reason when `field` names a control that used to
+ *  exist and enforced nothing. */
+function rejectIfRemovedSecurityControl(field: string): void {
+  const reason = REMOVED_SECURITY_CONTROLS.get(field)
+  if (reason !== undefined) {
+    throw new Error(`aps config: ${field} was removed in this release and is no longer accepted (${reason}). Remove it from your config and re-check your policy.`)
+  }
+}
 
 export function loadConfig(): APSPluginConfig {
   const envPath = process.env.OPENCLAW_APS_CONFIG_PATH
   const homePath = join(homedir(), '.openclaw', 'aps.config.json')
-  const path = envPath ?? (existsAsFile(homePath) ? homePath : null)
-  if (!path) return DEFAULT_CONFIG
-  const raw: unknown = JSON.parse(readFileSync(path, 'utf8'))
+  const path = envPath ?? homePath
+  let text: string
+  try {
+    text = readFileSync(path, 'utf8')
+  } catch (e) {
+    // Absent is a real state and falls back to defaults. Present but
+    // unreadable is NOT absent: treating a permission failure as "no policy
+    // file" silently downgraded an operator's policy to permissive defaults.
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
+      if (envPath !== undefined) {
+        throw new Error(`aps config: OPENCLAW_APS_CONFIG_PATH is set to ${path} but no such file exists`)
+      }
+      return DEFAULT_CONFIG
+    }
+    throw new Error(`aps config: ${path} exists but could not be read: ${(e as Error).message}`)
+  }
+  let raw: unknown
+  try {
+    raw = JSON.parse(text)
+  } catch (e) {
+    throw new Error(`aps config: ${path} is not valid JSON: ${(e as Error).message}`)
+  }
   return validate(raw)
-}
-
-function existsAsFile(p: string): boolean {
-  try { readFileSync(p, 'utf8'); return true } catch { return false }
 }
 
 function validate(raw: unknown): APSPluginConfig {
   if (!raw || typeof raw !== 'object') throw new Error('aps config: expected object')
   const obj = raw as Record<string, unknown>
   for (const k of Object.keys(obj)) {
-    if (!KNOWN_TOP_LEVEL.has(k)) console.warn(`[aps-plugin] unknown top-level config key: ${k}`)
+    if (!KNOWN_TOP_LEVEL.has(k)) {
+      throw new Error(`aps config: unrecognized top-level field: ${k}`)
+    }
+  }
+  const endpoints = (obj.endpoints ?? {}) as Record<string, unknown>
+  for (const k of Object.keys(endpoints)) {
+    if (KNOWN_ENDPOINTS.has(k)) continue
+    const removed = REMOVED_ENDPOINTS.get(k)
+    if (removed !== undefined) {
+      console.warn(`[aps-plugin] endpoints.${k} is no longer used and is ignored (${removed})`)
+      continue
+    }
+    throw new Error(`aps config: unrecognized endpoints field: ${k}`)
   }
   const policy = (obj.policy ?? {}) as Record<string, unknown>
   for (const k of Object.keys(policy)) {
+    rejectIfRemovedSecurityControl(`policy.${k}`)
     if (!KNOWN_POLICY.has(k)) throw new Error(`aps config: unrecognized policy field: ${k}`)
   }
   return mergeWithDefaults(obj)
@@ -109,13 +179,12 @@ function mergeWithDefaults(obj: Record<string, unknown>): APSPluginConfig {
   const credentials = (obj.credentials ?? {}) as Partial<APSPluginConfig['credentials']>
   return {
     provider: 'aps',
-    endpoints: { ...DEFAULT_CONFIG.endpoints, ...endpoints },
-    credentials: { ...DEFAULT_CONFIG.credentials, ...credentials },
+    endpoints: { verifier: normalizeVerifierUrl(endpoints.verifier) },
+    credentials: { passportPath: normalizeAbsolutePath('credentials.passportPath', credentials.passportPath, DEFAULT_CONFIG.credentials.passportPath) },
     signing: normalizeSigningConfig(obj.signing),
     policy: {
-      skillAuthor: { ...DEFAULT_CONFIG.policy.skillAuthor, ...(policy.skillAuthor ?? {}) },
-      toolCalls: { ...DEFAULT_CONFIG.policy.toolCalls, ...(policy.toolCalls ?? {}) },
-      inboundMessages: { ...DEFAULT_CONFIG.policy.inboundMessages, ...(policy.inboundMessages ?? {}) },
+      skillAuthor: normalizeSkillAuthorPolicy(policy.skillAuthor),
+      toolCalls: normalizeToolCallsPolicy(policy.toolCalls),
       delegation: normalizeDelegationPolicy(policy.delegation),
     },
   }
@@ -145,15 +214,16 @@ function normalizeSigningConfig(raw: unknown): SigningConfig {
     }
     return item.trim()
   })
-  const auditLogPath = obj.auditLogPath
-  if (auditLogPath !== undefined && (typeof auditLogPath !== 'string' || auditLogPath.length === 0)) {
-    throw new Error('aps config: signing.auditLogPath must be a non-empty string')
-  }
+  const auditLogPath = normalizeAbsolutePath(
+    'signing.auditLogPath',
+    obj.auditLogPath,
+    DEFAULT_CONFIG.signing.auditLogPath,
+  )
   return {
     enabled: obj.enabled === true,
     allowedCallers,
     requireApproval: obj.requireApproval === true,
-    auditLogPath: auditLogPath ?? DEFAULT_CONFIG.signing.auditLogPath,
+    auditLogPath,
   }
 }
 
@@ -190,4 +260,115 @@ function normalizeDelegationPolicy(raw: unknown): APSPluginConfig['policy']['del
     return { issuer: rec.issuer, publicKey: rec.publicKey, ...(typeof vm === 'string' ? { verificationMethod: vm } : {}) }
   })
   return { trustedIssuers, allowSelfSignedRoot }
+}
+
+/** Custom paths go straight to Node filesystem APIs, which do not expand `~`.
+ *  A path like `~/x` was silently created as a literal `./~/x`, so a relative
+ *  or tilde path is a configuration error rather than a surprise location.
+ *  The defaults still resolve through homedir(). */
+function normalizeAbsolutePath(field: string, raw: unknown, fallback: string): string {
+  if (raw === undefined) return fallback
+  if (typeof raw !== 'string' || raw.trim().length === 0) {
+    throw new Error(`aps config: ${field} must be a non-empty string`)
+  }
+  const value = raw.trim()
+  if (value.startsWith('~')) {
+    throw new Error(`aps config: ${field} must be an absolute path; '~' is not expanded (received ${value})`)
+  }
+  if (!isAbsolute(value)) {
+    throw new Error(`aps config: ${field} must be an absolute path (received ${value})`)
+  }
+  return value
+}
+
+function normalizeVerifierUrl(raw: unknown): string {
+  if (raw === undefined) return DEFAULT_CONFIG.endpoints.verifier
+  if (typeof raw !== 'string' || raw.trim().length === 0) {
+    throw new Error('aps config: endpoints.verifier must be a non-empty string')
+  }
+  const value = raw.trim()
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    throw new Error(`aps config: endpoints.verifier must be an absolute URL (received ${value})`)
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    throw new Error(`aps config: endpoints.verifier must be http or https (received ${parsed.protocol})`)
+  }
+  return value
+}
+
+const KNOWN_SKILL_AUTHOR = new Set(['warnBelow', 'blockBelow'])
+const GRADE_THRESHOLD_MAX = 4
+
+/** APS grades are 0 to 3, so a threshold is an integer 0 to 4: 0 never fires
+ *  and 4 fires for every grade. Anything else is a configuration error, not a
+ *  value to clamp, because a mistyped threshold silently disables a gate. */
+function normalizeGradeThreshold(field: string, raw: unknown, fallback: number): number {
+  if (raw === undefined) return fallback
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 0 || raw > GRADE_THRESHOLD_MAX) {
+    throw new Error(`aps config: ${field} must be an integer between 0 and ${GRADE_THRESHOLD_MAX} (received ${JSON.stringify(raw)})`)
+  }
+  return raw
+}
+
+function normalizeSkillAuthorPolicy(raw: unknown): APSPluginConfig['policy']['skillAuthor'] {
+  if (raw === undefined || raw === null) return { ...DEFAULT_CONFIG.policy.skillAuthor }
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('aps config: policy.skillAuthor must be an object')
+  }
+  const obj = raw as Record<string, unknown>
+  for (const k of Object.keys(obj)) {
+    rejectIfRemovedSecurityControl(`policy.skillAuthor.${k}`)
+    if (!KNOWN_SKILL_AUTHOR.has(k)) throw new Error(`aps config: unrecognized policy.skillAuthor field: ${k}`)
+  }
+  // null is the documented "blocking disabled" value and must stay distinct
+  // from an absent key, which takes the default.
+  let blockBelow: number | null
+  if (obj.blockBelow === null) blockBelow = null
+  else if (obj.blockBelow === undefined) blockBelow = DEFAULT_CONFIG.policy.skillAuthor.blockBelow
+  else blockBelow = normalizeGradeThreshold('policy.skillAuthor.blockBelow', obj.blockBelow, 0)
+  return {
+    warnBelow: normalizeGradeThreshold('policy.skillAuthor.warnBelow', obj.warnBelow, DEFAULT_CONFIG.policy.skillAuthor.warnBelow),
+    blockBelow,
+  }
+}
+
+const KNOWN_TOOL_CALLS = new Set(['highRiskTools', 'highRiskBehavior'])
+const HIGH_RISK_BEHAVIORS: readonly HighRiskBehavior[] = ['approval', 'block']
+
+function normalizeToolCallsPolicy(raw: unknown): APSPluginConfig['policy']['toolCalls'] {
+  if (raw === undefined || raw === null) return { ...DEFAULT_CONFIG.policy.toolCalls, highRiskTools: [...DEFAULT_CONFIG.policy.toolCalls.highRiskTools] }
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('aps config: policy.toolCalls must be an object')
+  }
+  const obj = raw as Record<string, unknown>
+  for (const k of Object.keys(obj)) {
+    rejectIfRemovedSecurityControl(`policy.toolCalls.${k}`)
+    if (!KNOWN_TOOL_CALLS.has(k)) throw new Error(`aps config: unrecognized policy.toolCalls field: ${k}`)
+  }
+  const rawTools = obj.highRiskTools
+  if (rawTools !== undefined && !Array.isArray(rawTools)) {
+    throw new Error('aps config: policy.toolCalls.highRiskTools must be an array of strings')
+  }
+  const highRiskTools = rawTools === undefined
+    ? [...DEFAULT_CONFIG.policy.toolCalls.highRiskTools]
+    : rawTools.map((item, i) => {
+        if (typeof item !== 'string' || item.trim().length === 0) {
+          throw new Error(`aps config: policy.toolCalls.highRiskTools[${i}] must be a non-empty string`)
+        }
+        return item.trim()
+      })
+  const rawBehavior = obj.highRiskBehavior
+  if (rawBehavior === undefined) {
+    return { highRiskTools, highRiskBehavior: DEFAULT_CONFIG.policy.toolCalls.highRiskBehavior }
+  }
+  if (typeof rawBehavior !== 'string' || !HIGH_RISK_BEHAVIORS.includes(rawBehavior as HighRiskBehavior)) {
+    const removedNote = rawBehavior === 'warn'
+      ? ' The "warn" behaviour was removed: it was accepted and then emitted nothing.'
+      : ''
+    throw new Error(`aps config: policy.toolCalls.highRiskBehavior must be one of ${HIGH_RISK_BEHAVIORS.join(', ')} (received ${JSON.stringify(rawBehavior)}).${removedNote}`)
+  }
+  return { highRiskTools, highRiskBehavior: rawBehavior as HighRiskBehavior }
 }

@@ -1,3 +1,15 @@
+## v0.2.1 (2026-09-08)
+
+Answers the ClawHub 0.2.0 review, which put the plugin in Review because a configured passport private key was reachable for arbitrary signing by any other installed plugin through the `aps.signMessage` RPC.
+
+- **Signing is off by default.** New `signing.enabled`, default `false`. While it is off, `aps.signMessage` refuses every request and the passport file is never opened. Install and tool gates are unaffected.
+- **When on, every call is gated on caller identity.** `signing.allowedCallers` lists OpenClaw plugin ids, or the literal `gateway-client` for an authenticated client the host did not name as a plugin. Empty, the default, allows nobody. The caller comes from the `client` the host passes to the handler: a plugin calling through the trusted in-process runtime is named by `client.internal.pluginRuntimeOwnerId`, which OpenClaw stamps itself and never reads from request parameters.
+- **`signing.requireApproval` defaults to true and fails closed.** OpenClaw 2026.9.2 exposes no approval channel to a gateway RPC handler. The `requireApproval` field the tool-call gate uses is a return value of the `before_tool_call` hook, and the SDK dispatch helper that could reach `plugin.approval.request` is restricted to plugin HTTP routes. So an approval-gated request is refused rather than signed unattended. Citations are in the header of `src/signing.ts`.
+- **Every signature carries a domain-separation prefix.** Signing input is `APS-OPENCLAW-PLUGIN-SIGN-MESSAGE-V1\0` plus the message, following the convention the SDK uses for authority delegations. A signature minted here does not verify as a passport, attestation or delegation signature over the same bytes.
+- **Local audit log.** Every request and refusal appends one JSON line to `signing.auditLogPath`, default `~/.openclaw/aps-signing-audit.log`, recording outcome, caller, domain prefix and message digest. Never the message body.
+- `aps.signMessage` now takes `{ message }` and returns `{ signature, domain, digest }`.
+- Tests: 19 to 29. Added refusal while disabled with the passport never read, refusal for a caller off the allowlist across all three caller kinds, the approval path approved and denied, refusal when no approval channel exists, the prefix present and non-replayable on every signature, the audit record carrying a digest and not a body, and the signing config staying fail-closed.
+
 ## v0.2.0 (2026-09-08)
 
 - **Depends on `agent-passport-system` ^6.0.1**, up from ^2.2.0. The 2.x line is inside the September 2026 advisories (GHSA-r2fw-x6mg-f6h8, high: verification could succeed with untrusted authority, unlinked artifacts, replayable context; GHSA-72cm-hhw9-f66f, medium: Ed25519 accepts inadmissible small-order keys).

@@ -32,6 +32,12 @@ Schema (matches spec section 8):
     "jwks": "https://gateway.aeoess.com/.well-known/jwks.json"
   },
   "credentials": { "passportPath": "~/.openclaw/aps-credentials.json" },
+  "signing": {
+    "enabled": false,
+    "allowedCallers": [],
+    "requireApproval": true,
+    "auditLogPath": "~/.openclaw/aps-signing-audit.log"
+  },
   "policy": {
     "skillAuthor": { "minGrade": 0, "warnBelow": 1, "blockBelow": null },
     "toolCalls": { "enforceScope": true, "highRiskTools": ["bash", "exec", "fetch"], "highRiskBehavior": "approval" },
@@ -44,7 +50,11 @@ Schema (matches spec section 8):
 |---|---|
 | `endpoints.verifier` | Public APS trust profile API base URL |
 | `endpoints.jwks` | APS gateway JWKS endpoint for envelope signature verification |
-| `credentials.passportPath` | Local APS passport file (used for signing outbound messages) |
+| `credentials.passportPath` | Local APS passport file. Read only when `signing.enabled` is true |
+| `signing.enabled` | Turn on `aps.signMessage`. Default `false`. See [Signing](#signing) |
+| `signing.allowedCallers` | Plugin ids, or the literal `gateway-client`, permitted to sign. Empty means nobody |
+| `signing.requireApproval` | Require a decision on every signing request. Default `true` |
+| `signing.auditLogPath` | Local log of every signing request and refusal |
 | `policy.skillAuthor.warnBelow` | Surface install-time warning when author grade < this |
 | `policy.skillAuthor.blockBelow` | Block install when author grade < this; `null` = never block |
 | `policy.toolCalls.highRiskTools` | Tool names treated as high-risk |
@@ -67,9 +77,26 @@ Exposed via `api.registerGatewayMethod()`, namespaced `aps.`:
 
 - `aps.checkGrade(agentId)` → `TrustProfile | null` from the public APS gateway
 - `aps.verifyDelegation(chain)` → result of APS SDK `verifyAuthorityDelegationChain()`. Takes the delegation **chain** as an array, root first, not a single token. Trust anchors come from `policy.delegation.trustedIssuers`; with none configured nothing verifies, which is the default. Revocation resolves to `unknown` because this plugin carries no revocation feed, so a cryptographically sound chain returns `state: "indeterminate"` rather than a `valid: true` it cannot establish.
-- `aps.signMessage(payload)` → Ed25519 signature using local passport's private key
+- `aps.signMessage({ message })` → `{ signature, domain, digest }`. Ed25519 signature over a domain-separated input, using the local passport's private key. Off unless the operator turns it on. See [Signing](#signing).
 
 Other plugins can call these by their namespaced names.
+
+## Signing
+
+`aps.signMessage` signs with the private key in the passport file at `credentials.passportPath`. A gateway method registered by a plugin is not private to that plugin: OpenClaw dispatches it for authenticated gateway clients, and other plugins can reach it through the in-process runtime. So configuring a passport path used to mean handing that key's signing power to every plugin installed alongside this one. That is what the ClawHub review of 0.2.0 flagged, and it is what 0.2.1 changes.
+
+What the reviewers told installers still holds, and the plugin now enforces it rather than only documenting it:
+
+- Signing is **off by default**. With `signing.enabled` false, `aps.signMessage` refuses every request and the passport file is never opened. Install and tool gates keep working.
+- Turning it on is a decision about every plugin on the host, not just this one. Turn it on only if you trust each installed plugin that could call `aps.signMessage`, and prefer a limited-purpose passport identity over your main one.
+- `signing.allowedCallers` names who may sign. Entries are OpenClaw plugin ids, or the literal `gateway-client` for an authenticated gateway client that the host did not identify as a plugin. An empty list, the default, allows nobody.
+- `signing.requireApproval` defaults to true and fails closed. OpenClaw 2026.9.2 gives a gateway RPC handler no channel to ask a person for a decision. The `requireApproval` mechanism the tool-call gate uses is a return value of the `before_tool_call` hook and is not reachable from an RPC handler, and the SDK helper that could reach the host's `plugin.approval.request` method is limited to plugin HTTP routes. So while `requireApproval` is true, signing requests are refused rather than signed unattended. To sign, an operator must set it to false and accept that the allowlist is the only gate. This is a gap in the host surface, not something the plugin can fill; the citations are in the header of `src/signing.ts`.
+
+Every signature is minted over `APS-OPENCLAW-PLUGIN-SIGN-MESSAGE-V1\0` plus the message, following the domain-separation convention the SDK uses for authority delegations. A signature produced here therefore does not verify as a passport, attestation or delegation signature over the same bytes, and cannot be replayed into one of those contexts.
+
+Every request and every refusal is appended as one JSON line to `signing.auditLogPath`, by default `~/.openclaw/aps-signing-audit.log`. Each line records the timestamp, the outcome, the caller, the domain prefix and the sha256 digest of the message. The message body is never written.
+
+One limit worth knowing: the caller name comes from what the host supplies. A plugin dispatching through the trusted in-process runtime is named exactly, because OpenClaw stamps the plugin id itself and never takes it from request parameters. A plugin that instead forwards a request from one of its own HTTP routes arrives carrying the original client and is indistinguishable from `gateway-client`. Allowlisting `gateway-client` is therefore broader than allowlisting a plugin id.
 
 ## Conformance
 

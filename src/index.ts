@@ -10,10 +10,11 @@
 // (agent-passport-system 6.0.0 advisory GHSA-r2fw-x6mg-f6h8).
 
 import { existsSync, readFileSync } from 'node:fs'
-import { sign, verifyAuthorityDelegationChain } from 'agent-passport-system'
+import { verifyAuthorityDelegationChain } from 'agent-passport-system'
 import type { AuthorityDelegationV1, RevocationResolution } from 'agent-passport-system'
 import { type APSPluginConfig, loadConfig } from './config.js'
 import { type TrustProfile, checkGrade, fetchJWKS } from './aps-client.js'
+import { type GatewayCallerClient, makeSignMessage } from './signing.js'
 
 // Narrow structural types matching the OpenClaw hook surface at 2026.9.2
 // (src/plugins/hook-types.ts). Defined locally so the plugin does not depend on
@@ -49,8 +50,21 @@ export interface PluginAPI {
       : K extends 'before_tool_call' ? (e: ToolCallEvent) => Promise<ToolCallResult | void> | ToolCallResult | void
       : (e: GatewayStartEvent) => Promise<void> | void,
   ): void
-  registerGatewayMethod(name: string, handler: (...args: unknown[]) => Promise<unknown> | unknown): void
+  registerGatewayMethod(
+    name: string,
+    handler: (opts: GatewayMethodOptions) => Promise<unknown> | unknown,
+  ): void
   log?: (level: 'info' | 'warn' | 'error', message: string) => void
+}
+
+/** The normalized invocation options OpenClaw 2026.9.2 passes to a registered
+ *  gateway method (GatewayRequestHandlerOptions,
+ *  src/gateway/server-methods/shared-types.ts:449), forwarded verbatim to the
+ *  plugin handler by src/plugins/registry-registrars-network.ts:33. Only the
+ *  two fields this plugin reads are declared; the host passes more. */
+export interface GatewayMethodOptions {
+  params?: Record<string, unknown>
+  client?: GatewayCallerClient | null
 }
 
 const COLD_LATENCY_BUDGET_MS = 500
@@ -160,6 +174,9 @@ export default function definePlugin(api: PluginAPI): void {
       try { JSON.parse(readFileSync(passportPath, 'utf8')); log(api, 'info', `passport file present at ${passportPath}`) }
       catch (e) { log(api, 'warn', `passport file at ${passportPath} did not parse: ${(e as Error).message}`) }
     } else log(api, 'info', `no local passport at ${passportPath} (signing methods will be unavailable)`)
+    log(api, 'info', config.signing.enabled
+      ? `aps.signMessage enabled for callers [${config.signing.allowedCallers.join(', ') || 'none'}], requireApproval=${config.signing.requireApproval}, audit log ${config.signing.auditLogPath}`
+      : 'aps.signMessage disabled (signing.enabled is false); the passport key is never loaded')
     log(api, 'info', `aps plugin ready (provider=${config.provider}, verifier=${config.endpoints.verifier})`)
   })
 
@@ -177,12 +194,8 @@ export default function definePlugin(api: PluginAPI): void {
     return verifyChain(config, chain)
   })
 
-  api.registerGatewayMethod('aps.signMessage', async (...args: unknown[]) => {
-    const passportPath = config.credentials.passportPath
-    if (!existsSync(passportPath)) throw new Error('aps.signMessage: no local passport configured')
-    const passport: unknown = JSON.parse(readFileSync(passportPath, 'utf8'))
-    if (!passport || typeof passport !== 'object' || !('privateKey' in passport)) throw new Error('aps.signMessage: passport file missing privateKey')
-    const payload = typeof args[0] === 'string' ? args[0] : JSON.stringify(args[0])
-    return sign(payload, (passport as { privateKey: string }).privateKey)
-  })
+  // Signing is gated in ./signing.ts: off unless the operator turned it on,
+  // then allowlisted against the caller identity the host actually supplies,
+  // then approval-gated, and only then does the passport key get loaded.
+  api.registerGatewayMethod('aps.signMessage', makeSignMessage(config))
 }

@@ -1,4 +1,4 @@
-> Archived 2026-09-02. Plugin built against an earlier SDK generation; not maintained.
+> Not current. This plugin still depends on agent-passport-system ^2.2.0, an SDK generation covered by the September 2026 advisories; do not rely on its verification until it is reworked on SDK 6.x. The 0.1.2 manifest fix is on this branch; no new version is published until then.
 
 # agent-passport-system-openclaw-plugin
 

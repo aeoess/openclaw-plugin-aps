@@ -47,6 +47,24 @@ describe('config', () => {
     expect(cfg.policy.skillAuthor.blockBelow).toBe(1)
   })
 
+  it('loads the signing block and keeps it fail-closed', () => {
+    const path = join(tmp, 'signing.json')
+    writeFileSync(path, JSON.stringify({ signing: { enabled: true, allowedCallers: ['peer'] } }))
+    process.env.OPENCLAW_APS_CONFIG_PATH = path
+    const cfg = loadConfig()
+    expect(cfg.signing.enabled).toBe(true)
+    expect(cfg.signing.allowedCallers).toEqual(['peer'])
+    // Not stated in the file, so approval stays on.
+    expect(cfg.signing.requireApproval).toBe(true)
+  })
+
+  it('rejects malformed config (unrecognized signing field)', () => {
+    const path = join(tmp, 'bad-signing.json')
+    writeFileSync(path, JSON.stringify({ signing: { enable: true } }))
+    process.env.OPENCLAW_APS_CONFIG_PATH = path
+    expect(() => loadConfig()).toThrow(/unrecognized signing field/)
+  })
+
   it('rejects malformed config (unrecognized policy field)', () => {
     const path = join(tmp, 'bad.json')
     writeFileSync(path, JSON.stringify({ policy: { wat: {} } }))

@@ -2,7 +2,11 @@
 
 OpenClaw plugin: Agent Passport System trust verification provider. Reference implementation of [Agent Trust Verification Provider Pattern v0.1](https://github.com/aeoess/agent-trust-verification-providers).
 
-The plugin gates skill installs against the APS public trust registry, gates high-risk tool calls behind explicit approval, and exposes APS primitives (grade lookup, delegation verification, message signing) via OpenClaw gateway RPC. It runs entirely in the OpenClaw plugin lifecycle and adds no requirement on OpenClaw core.
+> **Known issue: versions through 0.2.1 do not register successfully with current OpenClaw and do not provide the gating described below.** Registration fails on the first hook, before the enforcement hooks and the gateway methods are installed. A corrected release is in progress.
+>
+> To check an installation, run `openclaw plugins inspect aps --runtime`. On the affected versions it reports a registration error. `openclaw plugins list --json` may still report the plugin as `loaded`, so use runtime inspection for this issue.
+
+The plugin's intended behaviour is to gate skill installs against the APS public trust registry, gate high-risk tool calls behind explicit approval, and expose APS primitives (grade lookup, delegation verification, message signing) via OpenClaw gateway RPC. It runs entirely in the OpenClaw plugin lifecycle and adds no requirement on OpenClaw core.
 
 Verification runs in `agent-passport-system` 6.0.1. The plugin calls the SDK and implements no verification of its own. Delegation verification uses the authority-aware chain verifier with trust anchors the operator configures, so an integrity result is never returned as an authorization decision (SDK 6.0.0, advisory GHSA-r2fw-x6mg-f6h8).
 
@@ -65,11 +69,13 @@ Schema (matches spec section 8):
 
 | Hook | Status | Behavior |
 |---|---|---|
-| `before_install` | implemented | Looks up author grade against APS gateway. Returns `block` if grade < `blockBelow`, `findings` if grade < `warnBelow`, pass-through otherwise. Missing author or unknown author → warn finding. 500ms cold latency budget; on timeout, fails open. |
-| `before_tool_call` | implemented (high-risk-tools only) | Tools listed in `policy.toolCalls.highRiskTools` go through `highRiskBehavior` (approval / block / warn). Non-high-risk calls pass through. |
-| `gateway_start` | implemented | Loads config, fetches JWKS, validates passport file format. Failures log via plugin diagnostic channel; do not block startup. |
+| `before_install` | does not register with current OpenClaw | Looks up author grade against APS gateway. Returns `block` if grade < `blockBelow`, `findings` if grade < `warnBelow`, pass-through otherwise. Missing author or unknown author → warn finding. 500ms cold latency budget; on timeout, fails open. |
+| `before_tool_call` | does not register with current OpenClaw; high-risk tools only | Tools listed in `policy.toolCalls.highRiskTools` go through `highRiskBehavior` (approval / block / warn). Non-high-risk calls pass through. |
+| `gateway_start` | does not register with current OpenClaw | Loads config, fetches JWKS, validates passport file format. Failures log via plugin diagnostic channel; do not block startup. |
 | `inbound_claim` | deferred to v0.2 | |
 | `before_dispatch` | deferred to v0.2 | |
+
+The Behavior column describes intended behaviour. With current OpenClaw, versions through 0.2.1 do not register any of these handlers.
 
 ## Gateway RPC methods
 
@@ -85,9 +91,9 @@ Other plugins can call these by their namespaced names.
 
 `aps.signMessage` signs with the private key in the passport file at `credentials.passportPath`. A gateway method registered by a plugin is not private to that plugin: OpenClaw dispatches it for authenticated gateway clients, and other plugins can reach it through the in-process runtime. So configuring a passport path used to mean handing that key's signing power to every plugin installed alongside this one. That is what the ClawHub review of 0.2.0 flagged, and it is what 0.2.1 changes.
 
-What the reviewers told installers still holds, and the plugin now enforces it rather than only documenting it:
+What the reviewers told installers still holds. 0.2.1 adds allowlist enforcement inside the signing handler, but with current OpenClaw that handler is not registered, so the points below describe intended behaviour:
 
-- Signing is **off by default**. With `signing.enabled` false, `aps.signMessage` refuses every request and the passport file is never opened. Install and tool gates keep working.
+- Signing is **off by default**. With `signing.enabled` false, `aps.signMessage` refuses every request and the passport file is never opened.
 - Turning it on is a decision about every plugin on the host, not just this one. Turn it on only if you trust each installed plugin that could call `aps.signMessage`, and prefer a limited-purpose passport identity over your main one.
 - `signing.allowedCallers` names who may sign. Entries are OpenClaw plugin ids, or the literal `gateway-client` for an authenticated gateway client that the host did not identify as a plugin. An empty list, the default, allows nobody.
 - `signing.requireApproval` defaults to false, and the allowlist is the gate: signing is off unless `signing.enabled` is true, and an empty `allowedCallers` refuses everything. Setting `requireApproval` to true refuses every request, because OpenClaw 2026.9.2 gives a gateway RPC handler no channel to ask a person for a decision: the mechanism the tool-call gate uses is a return value of the `before_tool_call` hook, and the SDK helper that reaches the host approval method is limited to plugin HTTP routes. It exists so an operator can hard-stop signing without editing the allowlist, and it will become a real approval once the host offers one. Citations are in the header of `src/signing.ts`.

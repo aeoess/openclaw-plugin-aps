@@ -1,7 +1,7 @@
 {
   "id": "aps",
   "name": "Agent Passport System",
-  "description": "Agent Passport System trust verification provider for OpenClaw. Reference implementation of Agent Trust Verification Provider Pattern v0.1. Gates skill installs against the APS public trust registry, gates high-risk tool calls behind explicit approval, and exposes APS primitives (grade lookup, delegation verification, message signing) via OpenClaw gateway RPC.",
+  "description": "Agent Passport System trust verification provider for OpenClaw. Reference implementation of Agent Trust Verification Provider Pattern v0.1. Intended to gate skill installs and high-risk tool calls and to expose APS primitives via OpenClaw gateway RPC. Known issue: versions through 0.2.1 do not register successfully with current OpenClaw; see the repository README.",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

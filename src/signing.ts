@@ -1,32 +1,40 @@
 // Agent Passport System OpenClaw plugin — signing gate for aps.signMessage.
 //
+// Citations below name SYMBOLS, not line numbers. An earlier version cited line
+// numbers and they drifted between host releases; the symbols did not. Verified
+// against OpenClaw 2026.9.3, the exact version this plugin is pinned to and the
+// only host it has been exercised on.
+//
 // Why this file exists: aps.signMessage hands a configured local passport
-// private key to whoever can reach the gateway method. In OpenClaw 2026.9.2 a
-// plugin-registered gateway method is reachable by network gateway clients
-// (src/gateway/server-methods.ts:518 dispatches through the shared registry)
-// and by other plugins through the trusted in-process runtime
-// (src/gateway/server-plugins.ts:81 dispatchTrustedPluginGatewayMethod). So
-// signing is off by default, gated on caller identity when on, and every
+// private key to whoever can reach the gateway method. A plugin-registered
+// gateway method is reachable by network gateway clients, because the host
+// merges the plugin registry's gatewayHandlers into the gateway method registry
+// (src/gateway/server-methods.ts, buildGatewayMethodRegistry via
+// gatewayPluginHandlers), and by other plugins through the trusted in-process
+// runtime (src/gateway/server-plugins.ts, dispatchTrustedPluginGatewayMethod).
+// So signing is off by default, gated on caller identity when on, and every
 // signature carries a domain-separation prefix.
 //
-// Caller identity IS available: the host passes its GatewayClient to the
-// handler as `client` (src/gateway/server-methods/shared-types.ts:449, forwarded
-// verbatim by src/plugins/registry-registrars-network.ts:33). A plugin caller is
-// named by client.internal.pluginRuntimeOwnerId
-// (src/gateway/server-methods/client-types.ts:75), which the host stamps from
-// its own AsyncLocalStorage plugin scope and never from wire params
-// (src/gateway/server-plugin-runtime-client.ts:82).
+// Caller identity IS available: the host passes its GatewayClient to the handler
+// as `client` (GatewayRequestHandlerOptions in
+// src/gateway/server-methods/shared-types.ts), forwarded verbatim by
+// adaptPluginGatewayMethodHandler in
+// src/plugins/registry-registrars-network.ts. A plugin caller is named by
+// client.internal.pluginRuntimeOwnerId (declared in
+// src/gateway/server-methods/client-types.ts), which the host stamps from its
+// own AsyncLocalStorage plugin scope and never from wire params
+// (src/gateway/server-plugin-runtime-client.ts).
 //
-// Approval is NOT available. requireApproval is a return value of the
-// before_tool_call hook (src/plugins/hook-before-tool-call-result.ts:18),
+// Approval is NOT available to this handler. requireApproval is a return value
+// of the before_tool_call hook (src/plugins/hook-before-tool-call-result.ts),
 // consumed by the agent tool pipeline
-// (src/agents/agent-tools.before-tool-call.approval.ts:477). A gateway RPC
-// handler has no equivalent return channel, and the one SDK seam that could
-// reach the core plugin.approval.request method refuses unless the request
-// scope sets gatewayMethodDispatchAllowed
-// (src/plugin-sdk/gateway-method-runtime.ts:51), which only plugin HTTP routes
-// ever get (src/gateway/server/plugins-http.ts:146). So the default approver
-// here is absent and an approval-gated request is refused, not waved through.
+// (src/agents/agent-tools.before-tool-call.approval.ts). A gateway RPC handler
+// has no equivalent return channel, and the one SDK seam that could reach the
+// core plugin.approval.request method refuses unless the request scope sets
+// gatewayMethodDispatchAllowed (src/plugin-sdk/gateway-method-runtime.ts),
+// which only plugin HTTP routes ever get (src/gateway/server/plugins-http.ts).
+// So the default approver here is absent and an approval-gated request is
+// refused, not waved through.
 
 import { createHash } from 'node:crypto'
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
@@ -111,7 +119,7 @@ export type SigningApprover = (request: {
   domain: string
 }) => Promise<boolean>
 
-/** OpenClaw 2026.9.2 exposes no approval channel to a gateway RPC handler
+/** OpenClaw 2026.9.3 exposes no approval channel to a gateway RPC handler
  *  (see the file header for the exact citations), so there is nothing to
  *  return here. When signing.requireApproval is on, requests are refused
  *  rather than signed without a decision. */

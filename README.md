@@ -82,6 +82,18 @@ Schema (targets spec section 8):
 | `policy.toolCalls.highRiskTools` | Tool names treated as high-risk |
 | `policy.toolCalls.highRiskBehavior` | `"approval"` (default) or `"block"` |
 
+## Where the install gate applies
+
+The APS `before_install` gate runs on OpenClaw install flows that dispatch runtime
+plugin hooks. It was proved on Gateway `plugins.install`. CLI-driven installs do not
+load the APS runtime hook and are not gated by this plugin.
+
+What was tested is the Gateway plugin-install path: with a scoped package name, the
+plugin resolves the npm scope as the author, looks it up against the configured
+verifier, and a grade below `blockBelow` blocks the install, with the block reason
+returned in the Gateway response. Other install flows, including skill installation,
+have not been exercised and nothing is claimed about them.
+
 ## Hook coverage (Pattern v0.1)
 
 | Hook | Status | Behavior |
@@ -113,7 +125,7 @@ What the reviewers told installers still holds. The points below describe intend
 - Signing is **off by default**. With `signing.enabled` false, `aps.signMessage` refuses every request and the passport file is never opened.
 - Turning it on is a decision about every plugin on the host, not just this one. Turn it on only if you trust each installed plugin that could call `aps.signMessage`, and prefer a limited-purpose passport identity over your main one.
 - `signing.allowedCallers` names who may sign. Entries are OpenClaw plugin ids, or the literal `gateway-client` for an authenticated gateway client that the host did not identify as a plugin. An empty list, the default, allows nobody.
-- `signing.requireApproval` defaults to false, and the allowlist is the gate: signing is off unless `signing.enabled` is true, and an empty `allowedCallers` refuses everything. Setting `requireApproval` to true refuses every request, because OpenClaw 2026.9.2 gives a gateway RPC handler no channel to ask a person for a decision: the mechanism the tool-call gate uses is a return value of the `before_tool_call` hook, and the SDK helper that reaches the host approval method is limited to plugin HTTP routes. It exists so an operator can hard-stop signing without editing the allowlist, and it will become a real approval once the host offers one. Citations are in the header of `src/signing.ts`.
+- `signing.requireApproval` defaults to false, and the allowlist is the gate: signing is off unless `signing.enabled` is true, and an empty `allowedCallers` refuses everything. Setting `requireApproval` to true refuses every request, because OpenClaw 2026.9.3, the version this release is built and proved against, gives a gateway RPC handler no channel to ask a person for a decision: the mechanism the tool-call gate uses is a return value of the `before_tool_call` hook, and the SDK helper that reaches the host approval method is limited to plugin HTTP routes. It exists so an operator can hard-stop signing without editing the allowlist, and it will become a real approval once the host offers one. Citations are in the header of `src/signing.ts`.
 
 Every signature is minted over `APS-OPENCLAW-PLUGIN-SIGN-MESSAGE-V1\0` plus the message, following the domain-separation convention the SDK uses for authority delegations. A signature produced here therefore does not verify as a passport, attestation or delegation signature over the same bytes, and cannot be replayed into one of those contexts.
 

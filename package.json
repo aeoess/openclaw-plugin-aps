@@ -31,6 +31,9 @@
   "dependencies": {
     "agent-passport-system": "^6.0.1"
   },
+  "peerDependencies": {
+    "openclaw": "2026.9.3"
+  },
   "devDependencies": {
     "@types/node": "^20.11.0",
     "openclaw": "2026.9.3",
@@ -60,11 +63,12 @@
       "./dist/index.js"
     ],
     "compat": {
-      "pluginApi": ">=2026.4.11",
-      "minGatewayVersion": "2026.4.11"
+      "pluginApi": "2026.9.3",
+      "minGatewayVersion": "2026.9.3"
     },
     "build": {
-      "openclawVersion": "2026.9.2"
+      "openclawVersion": "2026.9.3",
+      "pluginSdkVersion": "2026.9.3"
     }
   }
 }

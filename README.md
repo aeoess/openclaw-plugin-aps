@@ -2,17 +2,17 @@
 
 OpenClaw plugin: Agent Passport System trust verification provider. Targets [Agent Trust Verification Provider Pattern v0.1](https://github.com/aeoess/agent-trust-verification-providers).
 
-> **Known issue (verified 2026-09-08): versions through 0.2.1 do not register successfully with current OpenClaw and do not provide the gating described below.** Registration fails on the first hook, before the enforcement hooks and the gateway methods are installed. A corrected release is in progress.
+> **Known issue (verified 2026-09-08): the published 0.1.1 npm artifact and the 0.2.1 ClawHub artifact do not register successfully on OpenClaw 2026.9.3 and do not provide the gating described below.** Registration fails on the first hook, before the enforcement hooks and the gateway methods are installed. 0.3.0 is the first release verified end-to-end against OpenClaw 2026.9.3.
 >
-> To check an installation, run `openclaw plugins inspect aps --runtime`. On the affected versions it reports a registration error. `openclaw plugins list --json` may still report the plugin as `loaded`, so use runtime inspection for this issue.
+> To check an installation, run `openclaw plugins inspect aps --runtime`. On an affected version it reports a registration error. `openclaw plugins list --json` may still report the plugin as `loaded`, so use runtime inspection for this issue.
 
-The plugin's intended behaviour is to gate skill installs against the APS public trust registry, gate high-risk tool calls behind explicit approval, and expose APS primitives (grade lookup, delegation verification, message signing) via OpenClaw gateway RPC. It runs entirely in the OpenClaw plugin lifecycle and adds no requirement on OpenClaw core.
+The plugin gates plugin installs against the APS public trust registry on the Gateway `plugins.install` path, gates high-risk tool calls behind explicit approval, and exposes APS primitives (grade lookup, delegation verification, message signing) via OpenClaw gateway RPC. It runs entirely in the OpenClaw plugin lifecycle and adds no requirement on OpenClaw core.
 
 Delegation verification is implemented through `agent-passport-system` 6.0.1. The plugin contains no independent verifier. Delegation verification uses the authority-aware chain verifier with trust anchors the operator configures, so an integrity result is never returned as an authorization decision (SDK 6.0.0, advisory GHSA-r2fw-x6mg-f6h8).
 
 ## Install
 
-A corrected release is not yet available. These commands currently install affected versions and should not be relied on for enforcement.
+Version 0.3.0 is the corrected release verified end-to-end against OpenClaw 2026.9.3. Until 0.3.0 is published, these commands install an affected version and should not be relied on for enforcement.
 
 ```bash
 clawhub install agent-passport-system-openclaw-plugin
@@ -84,9 +84,9 @@ Schema (targets spec section 8):
 
 ## Where the install gate applies
 
-The APS `before_install` gate runs on OpenClaw install flows that dispatch runtime
-plugin hooks. It was proved on Gateway `plugins.install`. CLI-driven installs do not
-load the APS runtime hook and are not gated by this plugin.
+The APS `before_install` gate is verified on Gateway `plugins.install`. CLI-driven
+installs do not load the APS runtime hook and are not gated. Other install flows,
+including skill installation, have not been exercised and are not claimed.
 
 What was tested is the Gateway plugin-install path: with a scoped package name, the
 plugin resolves the npm scope as the author, looks it up against the configured
@@ -98,27 +98,27 @@ have not been exercised and nothing is claimed about them.
 
 | Hook | Status | Behavior |
 |---|---|---|
-| `before_install` | does not register with current OpenClaw | Looks up author grade against APS gateway. Returns `block` if grade < `blockBelow`, `findings` if grade < `warnBelow`, pass-through otherwise. Missing author, unknown author, unavailable verifier and malformed response each produce their own warn finding and never block. 500ms cold latency budget; a timeout is reported as an unavailable verifier. |
-| `before_tool_call` | does not register with current OpenClaw; high-risk tools only | Tools listed in `policy.toolCalls.highRiskTools` go through `highRiskBehavior` (approval or block). Approval offers only allow-once or deny, never allow-always, so the gate cannot be retired for later calls. Non-high-risk calls pass through. |
-| `gateway_start` | does not register with current OpenClaw | Loads config and reports signing state. The passport file is opened only when `signing.enabled` is true. Failures log via the host logger; they do not block startup. |
+| `before_install` | registered and exercised on OpenClaw 2026.9.3 | Looks up author grade against APS gateway. Returns `block` if grade < `blockBelow`, `findings` if grade < `warnBelow`, pass-through otherwise. Missing author, unknown author, unavailable verifier and malformed response each produce their own warn finding and never block. 500ms cold latency budget; a timeout is reported as an unavailable verifier. |
+| `before_tool_call` | registered and exercised on OpenClaw 2026.9.3; high-risk tools only | Tools listed in `policy.toolCalls.highRiskTools` go through `highRiskBehavior` (approval or block). Approval offers only allow-once or deny, never allow-always, so the gate cannot be retired for later calls. Non-high-risk calls pass through. |
+| `gateway_start` | registered and exercised on OpenClaw 2026.9.3 | Loads config and reports signing state. The passport file is opened only when `signing.enabled` is true. Failures log via the host logger; they do not block startup. |
 | `inbound_claim` | not implemented | |
 | `before_dispatch` | not implemented | |
 
-The Behavior column describes intended behaviour. With current OpenClaw, versions through 0.2.1 do not register any of these handlers.
+The Behavior column describes intended behaviour. On OpenClaw 2026.9.3, the published 0.1.0 and 0.1.1 npm artifacts and the 0.2.1 ClawHub artifact do not register any of these handlers.
 
-## Gateway RPC methods (intended)
+## Gateway RPC methods
 
-The plugin defines the following namespaced RPC handlers. With current OpenClaw, versions through 0.2.1 fail registration before these methods are installed.
+The plugin defines the following namespaced RPC handlers. All three answer over the Gateway boundary on OpenClaw 2026.9.3, and each has an integration regression.
 
 - `aps.checkGrade` with `params: { agentId }` → `TrustProfile | null` from the public APS gateway. That is the successful-response contract: a profile for a known author, `null` for an author the registry does not know. It is not the only outcome. If the verifier is unreachable or answers with a profile the plugin cannot trust, the call fails with a Gateway error (`aps_verifier_unavailable` or `aps_verifier_malformed`) rather than returning `null`, because reporting a transport failure as "author not known" is the conflation this release removed.
 - `aps.verifyDelegation` with `params: { chain }` → result of APS SDK `verifyAuthorityDelegationChain()`. `chain` is the delegation chain as an array, root first, not a single token. Gateway methods take one options object from the host; 0.2.0 read positional arguments and both RPCs were unusable. Trust anchors come from `policy.delegation.trustedIssuers`; with none configured nothing verifies, which is the default. Revocation resolves to `unknown` because this plugin carries no revocation feed, so a cryptographically sound chain returns `state: "indeterminate"` rather than a `valid: true` it cannot establish.
 - `aps.signMessage({ message })` → `{ signature, domain, digest }`. Ed25519 signature over a domain-separated input, using the local passport's private key. Off unless the operator turns it on. See [Signing](#signing).
 
-Once registration succeeds, other plugins can call these by their namespaced names.
+Other plugins can call these by their namespaced names.
 
 ## Signing
 
-The `aps.signMessage` handler is designed to sign with the private key in the passport file at `credentials.passportPath`. A gateway method registered by a plugin is not private to that plugin: OpenClaw dispatches it for authenticated gateway clients, and other plugins can reach it through the in-process runtime. The ClawHub review of 0.2.0 identified that, if registered, the original handler would have made that signing capability reachable too broadly. 0.2.1 adds caller allowlisting inside the handler, but with current OpenClaw registration fails before the handler is installed.
+The `aps.signMessage` handler is designed to sign with the private key in the passport file at `credentials.passportPath`. A gateway method registered by a plugin is not private to that plugin: OpenClaw dispatches it for authenticated gateway clients, and other plugins can reach it through the in-process runtime. The ClawHub review of 0.2.0 identified that the original handler would have made that signing capability reachable too broadly. On OpenClaw 2026.9.3 the signing RPC is registered. With signing disabled it refuses through the Gateway response channel and does not open the passport file. Caller allowlisting inside the handler has unit-level regressions.
 
 What the reviewers told installers still holds. The points below describe intended behaviour:
 
@@ -135,7 +135,7 @@ One limit worth knowing: the caller name comes from what the host supplies. A pl
 
 ## Conformance status
 
-Versions through 0.2.1 do not claim conformance to Agent Trust Verification Provider Pattern v0.1 with current OpenClaw. Criterion 1 is not met, because the required hooks do not register. The implementation targets the remaining pattern requirements, but those do not establish runtime conformance while registration fails. The per-criterion checklist is withheld until a release is proved against a real Gateway.
+0.3.0 does not currently claim Pattern v0.1 conformance. The previous checklist was tied to an earlier implementation and configuration surface and has not been re-evaluated against the final 0.3.0 behaviour. The registration failure that previously blocked criterion 1 is fixed and proved against OpenClaw 2026.9.3.
 
 ## v0.1 scope and known limitations
 
@@ -146,7 +146,7 @@ Versions through 0.2.1 do not claim conformance to Agent Trust Verification Prov
 
 ## Examples
 
-The examples below describe the intended configuration semantics. On affected versions with current OpenClaw, the handlers that apply these policies do not register.
+The examples below describe the configuration semantics.
 
 ### Default (permissive-with-warnings)
 

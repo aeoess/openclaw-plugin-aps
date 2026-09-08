@@ -1,3 +1,29 @@
+## 0.3.0
+
+First release verified end-to-end against OpenClaw 2026.9.3. Compatibility is currently declared only for that host version.
+
+**Hook registration fixed.** The plugin used the legacy `api.registerHook` path for typed lifecycle hooks. It now uses OpenClaw's typed `api.on` API.
+
+On OpenClaw 2026.9.3, the old nameless `registerHook` call throws `hook registration missing name`, aborting registration before the remaining hooks or gateway methods are installed. On `v2026.3.24-beta.2`, the minimum host declared by APS v0.1.1, the same call warns and returns without registering the hook. Therefore v0.1.1's advertised hooks did not register on its own declared minimum host. No claim is made about unchecked intermediate OpenClaw versions. The 0.1.1 npm artifact was reproduced failing registration on 2026.9.3. The 0.2.1 artifact on ClawHub carries the same two-argument calls and the same manifest without `activation.onStartup`.
+
+**Startup activation fixed.** On OpenClaw 2026.9.3, the manifest also lacked `activation.onStartup`, so correcting hook registration alone was not enough to put APS on the Gateway startup path. The manifest now opts into startup activation. A regression test removes that key and proves APS is no longer selected, `gateway_start` does not run, and a real high-risk execution proceeds ungated.
+
+**Signing-disabled filesystem behavior fixed.** The implementation contained a startup path that stat-ed, read and parsed the passport file before checking `signing.enabled`, contrary to the documented behavior. On the affected release under OpenClaw 2026.9.3, registration failed before that startup path was reached. The repaired implementation now proves at the filesystem boundary that signing disabled means zero passport-file access.
+
+**Bound to OpenClaw's public type surface.** The plugin previously maintained local interfaces for the host API, allowing unsupported assumptions about OpenClaw's contracts to compile. It now compiles against the exact-pinned OpenClaw 2026.9.3 public plugin types, imported as types only; generated JavaScript does not import the OpenClaw package at runtime.
+
+**Removed rather than repaired.** `policy.skillAuthor.minGrade`, `policy.toolCalls.enforceScope`, `policy.inboundMessages`, and `highRiskBehavior: "warn"` were exposed as controls but did not implement the behavior their names implied. They have been removed. Unused JWS/JWKS machinery, `endpoints.jwks`, and the unused `@noble/ed25519` dependency are also gone.
+
+**Breaking config change.** `endpoints.jwks` is accepted with a warning and ignored for compatibility. Removed security-control keys and other unknown configuration keys now produce a configuration error rather than being silently accepted.
+
+**Persistent approval is not offered.** High-risk approval requests present exactly `["allow-once", "deny"]`. The end-to-end regression proves deny executes the tool zero times and allow-once executes it exactly once. `allow-always` is not offered.
+
+**Trust lookup failures are distinct.** Unknown author, verifier unavailable and malformed verifier response are separate states. `aps.checkGrade` retains its successful-response contract of `TrustProfile | null`; unavailable and malformed responses surface as Gateway errors rather than being reported as an unknown author.
+
+**Install-gate scope.** The APS `before_install` gate runs on OpenClaw install flows that dispatch runtime plugin hooks. It is proved end-to-end on Gateway `plugins.install`. CLI-driven installs do not load the APS runtime hook and are not gated by this plugin.
+
+The repaired package is covered by repository-owned real-Gateway regressions against OpenClaw 2026.9.3, including the packed npm artifact. The tests cover startup activation, high-risk gating and approval, Gateway RPCs, plugin-install blocking, and an absolute external-network guard.
+
 ## Erratum (2026-09-08)
 
 Corrections to entries below, scoped to current OpenClaw. Historical entries are left as

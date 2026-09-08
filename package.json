@@ -1,6 +1,6 @@
 {
   "name": "agent-passport-system-openclaw-plugin",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "OpenClaw plugin: Agent Passport System trust verification provider.",
   "license": "Apache-2.0",
   "author": "Tymofii Pidlisnyi <signal@aeoess.com>",

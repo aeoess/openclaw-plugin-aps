@@ -17,11 +17,16 @@ import { checkGrade } from '../src/aps-client.js'
 
 const mockedCheckGrade = checkGrade as unknown as ReturnType<typeof vi.fn>
 
-const noopApi: PluginAPI = {
+// Test double for the host API. Only the members this plugin touches are
+// implemented; the host type has many more, so the partial is cast once here
+// rather than restated. src/index.ts itself is bound to the real host type.
+const stubLogger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} }
+const noopApi = {
+  on: () => {},
   registerHook: () => {},
   registerGatewayMethod: () => {},
-  log: () => {},
-}
+  logger: stubLogger,
+} as unknown as PluginAPI
 
 describe('config', () => {
   let tmp: string
@@ -141,31 +146,49 @@ describe('gateway methods receive the host options object', () => {
   // and so answered every call with "[object Object]" or a thrown error.
   function capture() {
     const methods = new Map<string, (request: Record<string, unknown>) => Promise<unknown>>()
-    const api: PluginAPI = {
+    const api = {
+      on: () => {},
       registerHook: () => {},
       registerGatewayMethod: (name: string, handler: unknown) => { methods.set(name, handler as (request: Record<string, unknown>) => Promise<unknown>) },
-      log: () => {},
-    }
+      logger: stubLogger,
+    } as unknown as PluginAPI
     definePlugin(api)
     return methods
   }
 
-  it('aps.checkGrade reads params.agentId and forwards it', async () => {
+  // The exported GatewayRequestHandler type is (opts) => void | Promise<void>.
+  // The host's runtime adapter would also deliver a returned value, but this
+  // plugin responds explicitly to satisfy the published type, so these assert
+  // respond rather than a return value.
+  it('aps.checkGrade reads params.agentId and responds with the profile', async () => {
     mockedCheckGrade.mockResolvedValueOnce({ found: true, grade: 2 } as unknown as never)
     const methods = capture()
-    const result = await methods.get('aps.checkGrade')!({ params: { agentId: 'agent-x' } })
+    const respond = vi.fn()
+    await methods.get('aps.checkGrade')!({ params: { agentId: 'agent-x' }, respond })
     expect(mockedCheckGrade).toHaveBeenCalledWith(expect.any(String), 'agent-x')
-    expect(result).toMatchObject({ grade: 2 })
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ grade: 2 }))
   })
 
-  it('aps.checkGrade refuses when params.agentId is missing', async () => {
+  it('aps.checkGrade responds with an error when params.agentId is missing', async () => {
     const methods = capture()
-    await expect(methods.get('aps.checkGrade')!({ params: {} })).rejects.toThrow(/params\.agentId/)
+    const respond = vi.fn()
+    await methods.get('aps.checkGrade')!({ params: {}, respond })
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringMatching(/params\.agentId/) }),
+    )
   })
 
   it('aps.verifyDelegation reads params.chain and refuses an empty one', async () => {
     const methods = capture()
-    await expect(methods.get('aps.verifyDelegation')!({ params: { chain: [] } })).rejects.toThrow(/params\.chain/)
-    await expect(methods.get('aps.verifyDelegation')!({})).rejects.toThrow(/params\.chain/)
+    const respond = vi.fn()
+    await methods.get('aps.verifyDelegation')!({ params: { chain: [] }, respond })
+    await methods.get('aps.verifyDelegation')!({ respond })
+    expect(respond).toHaveBeenCalledTimes(2)
+    for (const call of respond.mock.calls) {
+      expect(call[0]).toBe(false)
+      expect((call[2] as { message: string }).message).toMatch(/params\.chain/)
+    }
   })
 })

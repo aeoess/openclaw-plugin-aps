@@ -14,7 +14,8 @@ import { verifyAuthorityDelegationChain } from 'agent-passport-system'
 import type { AuthorityDelegationV1, RevocationResolution } from 'agent-passport-system'
 import { type APSPluginConfig, loadConfig } from './config.js'
 import { type TrustProfile, checkGrade, fetchJWKS } from './aps-client.js'
-import { type GatewayCallerClient, makeSignMessage } from './signing.js'
+import { makeSignMessage } from './signing.js'
+import type { OpenClawPluginApi } from 'openclaw/plugin-sdk/plugin-entry'
 
 // Narrow structural types matching the OpenClaw hook surface at 2026.9.2
 // (src/plugins/hook-types.ts). Defined locally so the plugin does not depend on
@@ -43,33 +44,22 @@ interface ToolCallResult {
 }
 interface GatewayStartEvent { port: number }
 
-export interface PluginAPI {
-  registerHook<K extends 'before_install' | 'before_tool_call' | 'gateway_start'>(
-    name: K,
-    handler: K extends 'before_install' ? (e: InstallEvent) => Promise<InstallResult | void> | InstallResult | void
-      : K extends 'before_tool_call' ? (e: ToolCallEvent) => Promise<ToolCallResult | void> | ToolCallResult | void
-      : (e: GatewayStartEvent) => Promise<void> | void,
-  ): void
-  registerGatewayMethod(
-    name: string,
-    handler: (opts: GatewayMethodOptions) => Promise<unknown> | unknown,
-  ): void
-  log?: (level: 'info' | 'warn' | 'error', message: string) => void
-}
+// Bound to the host's own contract. openclaw is pinned exactly and is a dev
+// dependency only; nothing from it is imported at runtime.
+export type PluginAPI = OpenClawPluginApi
 
 /** The normalized invocation options OpenClaw 2026.9.2 passes to a registered
  *  gateway method (GatewayRequestHandlerOptions,
  *  src/gateway/server-methods/shared-types.ts:449), forwarded verbatim to the
  *  plugin handler by src/plugins/registry-registrars-network.ts:33. Only the
  *  two fields this plugin reads are declared; the host passes more. */
-export interface GatewayMethodOptions {
-  params?: Record<string, unknown>
-  client?: GatewayCallerClient | null
-}
+export type GatewayMethodOptions = Parameters<
+  Parameters<OpenClawPluginApi['registerGatewayMethod']>[1]
+>[0]
 
 const COLD_LATENCY_BUDGET_MS = 500
 const log = (api: PluginAPI, level: 'info' | 'warn' | 'error', m: string): void =>
-  api.log ? api.log(level, `[aps] ${m}`) : (level === 'error' ? console.error : level === 'warn' ? console.warn : console.log)(`[aps] ${m}`)
+  api.logger[level](`[aps] ${m}`)
 
 function authorOf(event: InstallEvent): string | null {
   // Forward-compat: prefer explicit author if a future SDK adds it. Fall back
@@ -160,13 +150,36 @@ export function verifyChain(config: APSPluginConfig, chain: readonly unknown[]) 
   })
 }
 
+/** Adapts a value-returning handler to the host's exported GatewayRequestHandler,
+ *  which is typed (opts) => void | Promise<void>. The host's runtime adapter does
+ *  deliver a returned value (adaptPluginGatewayMethodHandler,
+ *  src/plugins/registry-registrars-network.ts:32-44 wraps every plugin gateway
+ *  method and calls respond(true, result) when the handler returned one), so the
+ *  exported type is stricter than the runtime. Responding explicitly satisfies
+ *  the published type; it is a compatibility choice, not a bug fix. The inner
+ *  handlers keep their own signatures and their own unit tests. */
+function gatewayMethod<T>(
+  handler: (request: GatewayMethodOptions) => Promise<T> | T,
+): (opts: GatewayMethodOptions) => Promise<void> {
+  return async (opts: GatewayMethodOptions): Promise<void> => {
+    try {
+      opts.respond(true, await handler(opts))
+    } catch (e) {
+      opts.respond(false, undefined, { code: 'aps_error', message: (e as Error).message })
+    }
+  }
+}
+
 export default function definePlugin(api: PluginAPI): void {
   const config = loadConfig()
 
-  api.registerHook('before_install', makeBeforeInstall(config, api))
-  api.registerHook('before_tool_call', makeBeforeToolCall(config))
+  // Typed lifecycle hooks are dispatched only by the typed hook runner, so they
+  // must be registered through api.on. api.registerHook is the legacy internal
+  // path and never reaches this dispatch.
+  api.on('before_install', makeBeforeInstall(config, api))
+  api.on('before_tool_call', makeBeforeToolCall(config))
 
-  api.registerHook('gateway_start', async (_event: GatewayStartEvent) => {
+  api.on('gateway_start', async (_event: GatewayStartEvent) => {
     try { await fetchJWKS(config.endpoints.jwks); log(api, 'info', `JWKS fetched from ${config.endpoints.jwks}`) }
     catch (e) { log(api, 'warn', `JWKS fetch failed: ${(e as Error).message}`) }
     const passportPath = config.credentials.passportPath
@@ -180,26 +193,27 @@ export default function definePlugin(api: PluginAPI): void {
     log(api, 'info', `aps plugin ready (provider=${config.provider}, verifier=${config.endpoints.verifier})`)
   })
 
-  // Gateway method handlers receive ONE options object from the host
-  // ({ params, respond, client, ... }); a returned value is delivered by the
-  // host as respond(true, value). Reading positional args here was the 0.2.0
-  // defect that made both RPCs unusable.
-  api.registerGatewayMethod('aps.checkGrade', async (request: { params?: Record<string, unknown> } = {}) => {
+  // The exported GatewayRequestHandler type is (opts) => void | Promise<void>, so
+  // returning a value is a type error even though the host's runtime adapter
+  // would deliver it. 0.2.0 read positional args, which was a real defect; 0.2.1
+  // corrected that to the options object and its RPCs would have worked had
+  // plugin registration completed at all.
+  api.registerGatewayMethod('aps.checkGrade', gatewayMethod(async (request) => {
     const agentId = typeof request.params?.agentId === 'string' ? request.params.agentId.trim() : ''
     if (!agentId) throw new Error('aps.checkGrade: params.agentId (string) required')
     return await checkGrade(config.endpoints.verifier, agentId)
-  })
+  }))
 
-  api.registerGatewayMethod('aps.verifyDelegation', async (request: { params?: Record<string, unknown> } = {}) => {
+  api.registerGatewayMethod('aps.verifyDelegation', gatewayMethod(async (request) => {
     const chain = request.params?.chain
     if (!Array.isArray(chain) || chain.length === 0) {
       throw new Error('aps.verifyDelegation: params.chain (non-empty array, root first) is required')
     }
     return verifyChain(config, chain)
-  })
+  }))
 
   // Signing is gated in ./signing.ts: off unless the operator turned it on,
   // then allowlisted against the caller identity the host actually supplies,
   // then approval-gated, and only then does the passport key get loaded.
-  api.registerGatewayMethod('aps.signMessage', makeSignMessage(config))
+  api.registerGatewayMethod('aps.signMessage', gatewayMethod(makeSignMessage(config)))
 }
